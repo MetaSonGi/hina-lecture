@@ -1,12 +1,18 @@
-/* 히나 클래스 화이트보드 — tldraw + Firestore 스냅샷 실시간 공유 */
+/* 히나 클래스 화이트보드 — tldraw + Firestore 스냅샷 실시간 공유
+ * board=main        → 강사 공용 보드 (강사 편집 → 전원에게 공유)
+ * board=s_<uid>     → 학생 개인 보드 (학생이 그림, 강사가 볼 수 있음)
+ */
 import { Tldraw } from 'https://esm.sh/@tldraw/tldraw@3.13.0?deps=react@18.3.1,react-dom@18.3.1';
 import React from 'https://esm.sh/react@18.3.1';
 import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1';
 
 const qs = new URLSearchParams(location.search);
 const room = qs.get('room') || 'demo';
-const mode = qs.get('mode') || 'view'; // edit(강사) | view(학생)
+const board = qs.get('board') || 'main';
+const mode = qs.get('mode') || 'view'; // edit | view
 const isDemo = qs.get('demo') === '1' || !window.HINA_CONFIG?.firebase;
+const docId = board === 'main' ? room : `${room}__${board}`;
+
 const statusEl = document.getElementById('status');
 const setStatus = (t, color) => {
   statusEl.textContent = t;
@@ -25,6 +31,12 @@ document.getElementById('back').addEventListener('click', () => { location.href 
 let saveTimer = null;
 let applyingRemote = false;
 
+function statusFor() {
+  if (isDemo) return mode === 'edit' ? '✏️ 그리기 모드 (데모)' : '👀 보기 모드 (데모)';
+  if (board === 'main') return mode === 'edit' ? '● 강사 보드 공유 중' : '● 강사 보드 보는 중';
+  return mode === 'edit' ? '✏️ 내 보드 (자동 저장됨)' : '👀 학생 보드 보는 중';
+}
+
 function Board() {
   const onMount = (editor) => {
     if (mode === 'view') {
@@ -32,13 +44,12 @@ function Board() {
     }
 
     if (isDemo) {
-      setStatus(mode === 'edit' ? '✏️ 편집 모드 (데모)' : '👀 보기 모드 (데모)', '#888');
+      setStatus(statusFor(), '#888');
       return;
     }
 
-    const docRef = db.collection('boards').doc(room);
+    const docRef = db.collection('boards').doc(docId);
 
-    // 기존 스냅샷 불러오기
     docRef.get().then((snap) => {
       if (snap.exists && snap.data().snapshot) {
         try {
@@ -47,11 +58,10 @@ function Board() {
         } catch (e) { console.warn('snapshot load failed', e); }
         applyingRemote = false;
       }
-      setStatus(mode === 'edit' ? '● 실시간 공유 중 (강사)' : '● 실시간 보는 중 (학생)', '#3fb950');
+      setStatus(statusFor(), '#3fb950');
     }).catch(() => setStatus('연결 실패 — 새로고침 해주세요', '#f85149'));
 
     if (mode === 'edit') {
-      // 변경 시 스로틀 저장
       editor.store.listen(() => {
         if (applyingRemote) return;
         clearTimeout(saveTimer);
@@ -62,7 +72,6 @@ function Board() {
         }, 2000);
       });
     } else {
-      // 학생: 실시간 구독
       docRef.onSnapshot((snap) => {
         if (!snap.exists || !snap.data().snapshot) return;
         try {
