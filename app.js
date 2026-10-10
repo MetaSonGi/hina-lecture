@@ -6,12 +6,12 @@
   const DEMO = !CFG.firebase;
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  let db = null, auth = null, storage = null;
+  let db = null, auth = null;
   let user = null; // {uid,email,name,photo,role,classId}
 
   if (!DEMO) {
     firebase.initializeApp(CFG.firebase);
-    auth = firebase.auth(); db = firebase.firestore(); storage = firebase.storage();
+    auth = firebase.auth(); db = firebase.firestore();
   } else {
     $('demoBanner').style.display = 'block';
     $('demoRow').style.display = 'flex';
@@ -76,15 +76,38 @@
       if (!fu) { user = null; show('view-login'); return; }
       const ref = db.collection('users').doc(fu.uid);
       const snap = await ref.get();
+      const role = await resolveRole(fu);
       if (!snap.exists) {
-        const isTeacher = (CFG.teacherEmails || []).includes(fu.email);
-        user = { uid: fu.uid, email: fu.email, name: fu.displayName, photo: fu.photoURL, role: isTeacher ? 'teacher' : 'pending', classId: null };
+        user = { uid: fu.uid, email: fu.email, name: fu.displayName, photo: fu.photoURL, role, classId: null };
         await ref.set({ ...user, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
       } else {
         user = { uid: fu.uid, ...snap.data() };
+        if (role === 'teacher' && user.role !== 'teacher') {
+          user.role = 'teacher';
+          await ref.update({ role: 'teacher' });
+        }
       }
       route();
     });
+  }
+
+  // 강사 판정: teachers/{uid} 문서 존재 여부.
+  // 최초 1회는 config/admins 문서의 emails 목록과 대조해 teachers 문서를 만든다.
+  // (이메일 allowlist는 공개 저장소가 아닌 Firestore에만 보관)
+  async function resolveRole(fu) {
+    try {
+      const t = await db.collection('teachers').doc(fu.uid).get();
+      if (t.exists) return 'teacher';
+      const a = await db.collection('config').doc('admins').get();
+      const emails = a.exists ? (a.data().emails || []) : [];
+      if (emails.includes(fu.email)) {
+        await db.collection('teachers').doc(fu.uid).set({
+          email: fu.email, createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        });
+        return 'teacher';
+      }
+    } catch (e) { console.warn('role resolve failed', e); }
+    return 'pending';
   }
 
   $('pendingRefresh').addEventListener('click', async () => {
@@ -124,7 +147,7 @@
   async function initTeacher() {
     tClasses = await getClasses();
     ['classSelect', 'matClass', 'linkClass', 'asClass', 'boardClass'].forEach((id) => classOptions($(id), tClasses, tClasses[0]?.id));
-    loadPending(); loadRoster(); loadMaterials(); loadLinks(); loadAssignments();
+    loadPending(); loadRoster(); loadMaterials(); loadLinks(); loadAssignments(); loadDriveFolder();
   }
 
   $('createClass').addEventListener('click', async () => {
@@ -168,7 +191,7 @@
     }).join('');
   }
 
-  // --- 주차별 자료 ---
+  // --- 주차별 자료 (드라이브 공유 링크 방식 — Storage 무료 플랜 미지원 대체) ---
   async function loadMaterials() {
     let mats;
     if (DEMO) mats = demoDb().materials;
@@ -179,14 +202,21 @@
     $('matList').innerHTML = weeks.map((w) => `
       <div class="week-group"><div class="week-title">${w}주차</div>
       ${mine.filter((m) => m.week === w).map((m) => `
-        <div class="mat-item"><span>📄 ${esc(m.title)} <span class="meta">${esc(m.name || '')}</span></span>
-        <span><button class="btn small" data-viewpdf="${m.id}">보기</button>
+        <div class="mat-item"><span>📄 ${esc(m.title)}</span>
+        <span><button class="btn small" data-openlink="${esc(m.url)}">보기</button>
         <button class="btn small ghost" data-delmat="${m.id}">삭제</button></span></div>`).join('')}</div>`).join('')
       || '<p class="hint">올린 자료가 없습니다</p>';
-    bindPdfView($('matList'), mats);
+    bindOpenLink($('matList'));
     $('matList').querySelectorAll('[data-delmat]').forEach((b) => b.addEventListener('click', () => delMaterial(b.dataset.delmat)));
   }
   $('matClass').addEventListener('change', loadMaterials);
+
+  // 링크는 새 탭으로 열기 (드라이브 공유 링크는 iframe 임베드가 막힐 수 있음)
+  function bindOpenLink(root) {
+    root.querySelectorAll('[data-openlink]').forEach((b) => b.addEventListener('click', () => {
+      window.open(b.dataset.openlink, '_blank', 'noopener');
+    }));
+  }
 
   async function delMaterial(id) {
     if (!confirm('삭제할까요?')) return;
@@ -196,26 +226,45 @@
   }
 
   $('matUpload').addEventListener('click', async () => {
-    const file = $('matFile').files[0];
-    const classId = $('matClass').value, week = +$('matWeek').value, title = $('matTitle').value.trim() || file?.name || '자료';
+    const classId = $('matClass').value, week = +$('matWeek').value;
+    const title = $('matTitle').value.trim(), url = $('matUrl').value.trim();
     if (!classId) { alert('반을 먼저 만드세요.'); return; }
-    if (!file) { alert('PDF 파일을 선택하세요.'); return; }
-    $('matUpload').disabled = true; $('matUpload').textContent = '업로드 중…';
+    if (!title || !url) { alert('자료 제목과 드라이브 공유 링크를 입력하세요.'); return; }
+    $('matUpload').disabled = true; $('matUpload').textContent = '추가 중…';
     try {
-      let url = '';
-      if (DEMO) { url = URL.createObjectURL(file); }
-      else {
-        const path = `materials/${classId}/${week}/${Date.now()}_${file.name}`;
-        await storage.ref(path).put(file);
-        url = await storage.ref(path).getDownloadURL();
-      }
-      const doc = { classId, week, title, url, name: file.name, createdAt: Date.now() };
+      const doc = { classId, week, title, url, createdAt: Date.now() };
       if (DEMO) { const d = demoDb(); doc.id = nid('m'); d.materials.push(doc); demoSave(d); }
       else await db.collection('materials').add({ ...doc, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
-      $('matTitle').value = ''; $('matFile').value = '';
+      $('matTitle').value = ''; $('matUrl').value = '';
       loadMaterials();
-    } catch (e) { alert('업로드 실패: ' + e.message); }
-    finally { $('matUpload').disabled = false; $('matUpload').textContent = '📤 PDF 올리기'; }
+    } catch (e) { alert('추가 실패: ' + e.message); }
+    finally { $('matUpload').disabled = false; $('matUpload').textContent = '➕ 자료 추가'; }
+  });
+
+  // --- 드라이브 폴더 링크 (강사가 1회 등록, Firestore에만 저장 — 저장소에 노출 안 됨) ---
+  async function loadDriveFolder() {
+    let url = '';
+    if (DEMO) url = localStorage.getItem('hina_drive_folder') || '';
+    else {
+      try {
+        const s = await db.collection('config').doc('drive').get();
+        if (s.exists) url = s.data().folderUrl || '';
+      } catch (e) { console.warn('drive config load failed', e); }
+    }
+    if (url) {
+      $('driveFolderInput').value = url;
+      $('driveFolderOpen').style.display = ''; $('driveFolderOpen').href = url;
+    }
+  }
+  $('driveFolderSave').addEventListener('click', async () => {
+    const url = $('driveFolderInput').value.trim();
+    if (!url) { alert('폴더 공유 링크를 입력하세요.'); return; }
+    try {
+      if (DEMO) localStorage.setItem('hina_drive_folder', url);
+      else await db.collection('config').doc('drive').set({ folderUrl: url }, { merge: true });
+      $('driveFolderOpen').style.display = ''; $('driveFolderOpen').href = url;
+      alert('저장됐습니다.');
+    } catch (e) { alert('저장 실패: ' + e.message); }
   });
 
   // --- 자료실 링크 ---
@@ -269,7 +318,7 @@
         ${clsStudents.map((st) => {
           const sub = aSubs.find((x) => x.studentId === st.uid);
           return `<div class="sub-row"><span>${esc(st.name)}</span>
-            ${sub ? `<span>${sub.type === 'git' ? `🔗 <a href="${esc(sub.url)}" target="_blank" rel="noopener">${esc(sub.url)}</a>` : `📎 <a href="${esc(sub.url)}" target="_blank" rel="noopener">${esc(sub.name || '파일')}</a>`}
+            ${sub ? `<span>${sub.type === 'git' ? `🔗 <a href="${esc(sub.url)}" target="_blank" rel="noopener">${esc(sub.url)}</a>` : `📎 <a href="${esc(sub.url)}" target="_blank" rel="noopener">${esc(sub.name || sub.url)}</a>`}
             <span class="pill done">제출됨</span></span>`
             : `<span class="no">미제출 <span class="pill wait">대기</span></span>`}</div>`;
         }).join('') || '<p class="hint">이 반에 학생이 없습니다</p>'}</div>`;
@@ -331,9 +380,9 @@
       <div class="week-group"><div class="week-title">${w}주차</div>
       ${mats.filter((m) => m.week === w).map((m) => `
         <div class="mat-item"><span>📄 ${esc(m.title)}</span>
-        <button class="btn small" data-viewpdf="${m.id}">보기</button></div>`).join('')}</div>`).join('')
+        <button class="btn small" data-openlink="${esc(m.url)}">보기</button></div>`).join('')}</div>`).join('')
       || '<p class="hint">아직 올라온 자료가 없습니다</p>';
-    bindPdfView($('sMatList'), mats);
+    bindOpenLink($('sMatList'));
 
     $('sLinkList').innerHTML = links.map((l) => `
       <li><span>🔗 <a href="${esc(l.url)}" target="_blank" rel="noopener" style="color:#58a6ff">${esc(l.title)}</a></span></li>`).join('')
@@ -344,9 +393,9 @@
       return `<div class="assign-card"><h3>📝 ${esc(a.title)}</h3>
         <div class="meta">${esc(a.desc || '')} · 마감: ${esc(a.due || '없음')}</div>
         ${sub ? `<div><span class="pill done">제출 완료</span>
-          ${sub.type === 'git' ? ` <a href="${esc(sub.url)}" target="_blank" rel="noopener" style="color:#58a6ff">${esc(sub.url)}</a>` : ` <span class="meta">${esc(sub.name || '파일')}</span>`}</div>`
+          ${sub.type === 'git' ? ` <a href="${esc(sub.url)}" target="_blank" rel="noopener" style="color:#58a6ff">${esc(sub.url)}</a>` : ` <a href="${esc(sub.url)}" target="_blank" rel="noopener" style="color:#58a6ff">${esc(sub.name || sub.url)}</a>`}</div>`
         : `<div class="row">
-            <input type="file" id="file_${a.id}" />
+            <input type="url" id="link_${a.id}" placeholder="파일/드라이브 공유 링크" style="flex:1" />
             ${a.allowGit ? `<input type="url" id="git_${a.id}" placeholder="Git 저장소 URL (선택)" style="flex:1" />` : ''}
             <button class="btn small primary" data-submit="${a.id}">제출하기</button>
           </div>`}</div>`;
@@ -363,40 +412,17 @@
   }
 
   async function submitAssignment(assignId) {
-    const file = $(`file_${assignId}`)?.files[0];
+    const linkUrl = $(`link_${assignId}`)?.value.trim();
     const gitUrl = $(`git_${assignId}`)?.value.trim();
-    if (!file && !gitUrl) { alert('파일을 선택하거나 Git URL을 입력하세요.'); return; }
+    if (!linkUrl && !gitUrl) { alert('파일/드라이브 링크 또는 Git URL을 입력하세요.'); return; }
     try {
-      let doc;
-      if (gitUrl) {
-        doc = { assignmentId: assignId, studentId: user.uid, studentName: user.name, type: 'git', url: gitUrl, createdAt: Date.now() };
-      } else {
-        let url;
-        if (DEMO) url = URL.createObjectURL(file);
-        else {
-          const path = `submissions/${assignId}/${user.uid}/${Date.now()}_${file.name}`;
-          await storage.ref(path).put(file);
-          url = await storage.ref(path).getDownloadURL();
-        }
-        doc = { assignmentId: assignId, studentId: user.uid, studentName: user.name, type: 'file', url, name: file.name, createdAt: Date.now() };
-      }
+      const doc = gitUrl
+        ? { assignmentId: assignId, studentId: user.uid, studentName: user.name, type: 'git', url: gitUrl, createdAt: Date.now() }
+        : { assignmentId: assignId, studentId: user.uid, studentName: user.name, type: 'link', url: linkUrl, createdAt: Date.now() };
       if (DEMO) { const d = demoDb(); doc.id = nid('s'); d.submissions.push(doc); demoSave(d); }
       else await db.collection('submissions').add({ ...doc, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
       alert('제출 완료!');
       initStudent();
     } catch (e) { alert('제출 실패: ' + e.message); }
   }
-
-  /* ================= PDF 뷰어 ================= */
-  function bindPdfView(root, mats) {
-    root.querySelectorAll('[data-viewpdf]').forEach((b) => b.addEventListener('click', () => {
-      const m = mats.find((x) => x.id === b.dataset.viewpdf);
-      if (!m) return;
-      $('pdfTitle').textContent = '📄 ' + m.title;
-      $('pdfFrame').src = m.url;
-      $('pdfModal').style.display = 'flex';
-    }));
-  }
-  $('pdfClose').addEventListener('click', () => { $('pdfModal').style.display = 'none'; $('pdfFrame').src = ''; });
-  $('pdfModal').addEventListener('click', (e) => { if (e.target === $('pdfModal')) $('pdfClose').click(); });
 })();

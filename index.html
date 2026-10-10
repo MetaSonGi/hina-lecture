@@ -9,7 +9,6 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
 </head>
 <body>
 
@@ -69,13 +68,20 @@
     <section id="t-material" class="tpanel">
       <h2>주차별 자료 올리기</h2>
       <div class="row">
+        <span>📁 드라이브 폴더:</span>
+        <input type="url" id="driveFolderInput" placeholder="폴더 공유 링크 붙여넣기" style="flex:1" />
+        <button id="driveFolderSave" class="btn small">저장</button>
+        <a id="driveFolderOpen" href="#" target="_blank" rel="noopener" class="btn small" style="display:none">폴더 열기</a>
+      </div>
+      <p class="hint">PDF는 드라이브 폴더에 올리고, 아래에 공유 링크를 붙여넣으세요 (무료)</p>
+      <div class="row">
         <select id="matClass"></select>
         <input type="number" id="matWeek" min="1" max="52" value="1" style="width:90px" /> 주차
         <input type="text" id="matTitle" placeholder="자료 제목" style="flex:1" />
-        <input type="file" id="matFile" accept="application/pdf" />
-        <button id="matUpload" class="btn small primary">📤 PDF 올리기</button>
+        <input type="url" id="matUrl" placeholder="드라이브 공유 링크 https://…" style="flex:2" />
+        <button id="matUpload" class="btn small primary">➕ 자료 추가</button>
       </div>
-      <p class="hint">PDF는 학생에게 보기 전용으로 공유됩니다</p>
+      <p class="hint">자료는 학생에게 보기 전용으로 공유됩니다</p>
       <div id="matList"></div>
     </section>
 
@@ -153,14 +159,6 @@
       <p class="hint">강사가 그리는 내용이 실시간으로 보이고, 내 보드에 직접 그릴 수도 있어요 (강사가 볼 수 있음)</p>
     </section>
   </main>
-</div>
-
-<!-- PDF 뷰어 모달 -->
-<div id="pdfModal" class="modal" style="display:none">
-  <div class="modal-box wide">
-    <div class="modal-head"><b id="pdfTitle"></b><button id="pdfClose" class="btn small">✕ 닫기</button></div>
-    <iframe id="pdfFrame" title="PDF 뷰어"></iframe>
-  </div>
 </div>
 
 <script src="app.js"></script>

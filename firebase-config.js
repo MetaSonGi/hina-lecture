@@ -1,14 +1,14 @@
 /* 히나 클래스 — Firebase 설정
  *
- * 실제 서비스로 쓰려면 아래 순서대로 Firebase 프로젝트를 만들고
- * firebaseConfig에 값을 채우세요. 비워두면 데모 모드로 동작합니다.
+ * 이 파일은 공개 저장소에 올라갑니다.
+ * firebaseConfig의 apiKey는 Firebase 웹 앱의 공개용 키이므로 노출되어도
+ * 괜찮습니다 (실제 권한은 Firestore 보안 규칙이 통제).
+ * 단, Google Cloud Console에서 이 키의 HTTP 리퍼러를
+ * https://metasongi.github.io/* 로 제한해 두는 것을 권장합니다.
  *
- * 1. https://console.firebase.google.com → 프로젝트 만들기
- * 2. Authentication → 로그인 방법 → Google 사용 설정
- * 3. Firestore Database → 만들기 (프로덕션 모드)
- * 4. Storage → 시작하기
- * 5. 프로젝트 설정 → 내 앱 → 웹 앱 등록 → firebaseConfig 복사
- * 6. teacherEmails에 강사 Gmail을 넣으세요 (이 이메일만 강사 권한)
+ * 강사 이메일 allowlist는 공개 저장소에 두지 않습니다.
+ * Firestore의 config/admins 문서 { emails: [...] } 로 관리합니다
+ * (로그인한 사용자만 읽을 수 있음).
  */
 window.HINA_CONFIG = {
   firebase: {
@@ -18,6 +18,5 @@ window.HINA_CONFIG = {
     storageBucket: "hina-class.firebasestorage.app",
     messagingSenderId: "210145740964",
     appId: "1:210145740964:web:4711ecb47b77a73317be31"
-  },
-  teacherEmails: ["sonhyogi0078@gmail.com"],
+  }
 };
