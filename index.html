@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>히나 클래스 — 강의 사이트</title>
+<link rel="stylesheet" href="style.css" />
+<script src="firebase-config.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
+</head>
+<body>
+
+<!-- ===== 로그인 ===== -->
+<div id="view-login" class="view">
+  <div class="login-box">
+    <h1>🌸 히나 클래스</h1>
+    <p class="sub">강사 · 학생 강의 플랫폼</p>
+    <div id="demoBanner" class="demo-banner" style="display:none">
+      데모 모드 — Firebase 미연결 상태입니다.<br />아래 버튼으로 체험하세요.
+    </div>
+    <button id="googleLogin" class="btn primary big">🔵 Google 계정으로 로그인</button>
+    <div class="demo-row" style="display:none" id="demoRow">
+      <button id="demoTeacher" class="btn">👩‍🏫 강사 데모</button>
+      <button id="demoStudent" class="btn">🧑‍🎓 학생 데모</button>
+    </div>
+    <p class="hint">학생은 로그인 후 강사의 승인을 기다립니다</p>
+  </div>
+</div>
+
+<!-- ===== 승인 대기 ===== -->
+<div id="view-pending" class="view" style="display:none">
+  <div class="login-box">
+    <h1>⏳ 승인 대기 중</h1>
+    <p class="sub" id="pendingMsg">강사가 승인하면 반에 들어갈 수 있어요.</p>
+    <button id="pendingRefresh" class="btn">🔄 상태 새로고침</button>
+    <button id="logout1" class="btn ghost">로그아웃</button>
+  </div>
+</div>
+
+<!-- ===== 강사 대시보드 ===== -->
+<div id="view-teacher" class="view" style="display:none">
+  <header class="app-head">
+    <div><h1>🌸 히나 클래스 <span class="badge">강사</span></h1></div>
+    <div class="head-right"><span id="tName"></span><button id="logout2" class="btn small ghost">로그아웃</button></div>
+  </header>
+  <nav class="tabs">
+    <button class="tab active" data-t="t-approve">🙋 승인 관리</button>
+    <button class="tab" data-t="t-material">📚 주차별 자료</button>
+    <button class="tab" data-t="t-links">🔗 자료실 링크</button>
+    <button class="tab" data-t="t-assign">📝 과제</button>
+    <button class="tab" data-t="t-board">🖊️ 화이트보드</button>
+  </nav>
+  <main>
+    <section id="t-approve" class="tpanel active">
+      <h2>승인 대기 학생</h2>
+      <div class="row">
+        <select id="classSelect"></select>
+        <input id="newClassName" placeholder="새 반 이름 (예: 3월 기초반)" />
+        <button id="createClass" class="btn small">➕ 반 만들기</button>
+      </div>
+      <ul id="pendingList" class="list"></ul>
+      <h2>반별 학생</h2>
+      <div id="classRoster"></div>
+    </section>
+
+    <section id="t-material" class="tpanel">
+      <h2>주차별 자료 올리기</h2>
+      <div class="row">
+        <select id="matClass"></select>
+        <input type="number" id="matWeek" min="1" max="52" value="1" style="width:90px" /> 주차
+        <input type="text" id="matTitle" placeholder="자료 제목" style="flex:1" />
+        <input type="file" id="matFile" accept="application/pdf" />
+        <button id="matUpload" class="btn small primary">📤 PDF 올리기</button>
+      </div>
+      <p class="hint">PDF는 학생에게 보기 전용으로 공유됩니다</p>
+      <div id="matList"></div>
+    </section>
+
+    <section id="t-links" class="tpanel">
+      <h2>자료실 링크 공유</h2>
+      <div class="row">
+        <select id="linkClass"></select>
+        <input type="text" id="linkTitle" placeholder="링크 제목" style="flex:1" />
+        <input type="url" id="linkUrl" placeholder="https://…" style="flex:2" />
+        <button id="linkAdd" class="btn small primary">➕ 추가</button>
+      </div>
+      <ul id="linkList" class="list"></ul>
+    </section>
+
+    <section id="t-assign" class="tpanel">
+      <h2>과제 내기</h2>
+      <div class="row">
+        <select id="asClass"></select>
+        <input type="text" id="asTitle" placeholder="과제 제목" style="flex:1" />
+        <input type="date" id="asDue" />
+        <label class="chk"><input type="checkbox" id="asGit" checked /> Git 제출 허용</label>
+        <button id="asCreate" class="btn small primary">➕ 과제 만들기</button>
+      </div>
+      <input type="text" id="asDesc" placeholder="과제 설명" style="width:100%;margin-bottom:14px" />
+      <h2>학생별 제출 현황</h2>
+      <div id="assignList"></div>
+    </section>
+
+    <section id="t-board" class="tpanel">
+      <h2>화이트보드 (tldraw 실시간 공유)</h2>
+      <div class="row">
+        <select id="boardClass"></select>
+        <button id="openBoardT" class="btn primary">🖊️ 보드 열기 (편집)</button>
+      </div>
+      <p class="hint">그린 내용은 학생 화면에 실시간으로 공유됩니다</p>
+    </section>
+  </main>
+</div>
+
+<!-- ===== 학생 대시보드 ===== -->
+<div id="view-student" class="view" style="display:none">
+  <header class="app-head">
+    <div><h1>🌸 히나 클래스 <span class="badge student">학생</span></h1></div>
+    <div class="head-right"><span id="sName"></span><button id="logout3" class="btn small ghost">로그아웃</button></div>
+  </header>
+  <nav class="tabs">
+    <button class="tab active" data-t="s-material">📚 강의 자료</button>
+    <button class="tab" data-t="s-links">🔗 자료실</button>
+    <button class="tab" data-t="s-assign">📝 과제 제출</button>
+    <button class="tab" data-t="s-board">🖊️ 화이트보드</button>
+  </nav>
+  <main>
+    <section id="s-material" class="tpanel active">
+      <h2 id="sMatTitle">주차별 강의 자료</h2>
+      <div id="sMatList"></div>
+    </section>
+    <section id="s-links" class="tpanel">
+      <h2>자료실 링크</h2>
+      <ul id="sLinkList" class="list"></ul>
+    </section>
+    <section id="s-assign" class="tpanel">
+      <h2>과제 제출</h2>
+      <div id="sAssignList"></div>
+    </section>
+    <section id="s-board" class="tpanel">
+      <h2>화이트보드 보기</h2>
+      <button id="openBoardS" class="btn primary">🖊️ 보드 열기 (보기 전용)</button>
+      <p class="hint">강사가 그리는 내용이 실시간으로 보입니다</p>
+    </section>
+  </main>
+</div>
+
+<!-- PDF 뷰어 모달 -->
+<div id="pdfModal" class="modal" style="display:none">
+  <div class="modal-box wide">
+    <div class="modal-head"><b id="pdfTitle"></b><button id="pdfClose" class="btn small">✕ 닫기</button></div>
+    <iframe id="pdfFrame" title="PDF 뷰어"></iframe>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
