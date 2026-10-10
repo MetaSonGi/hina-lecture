@@ -11,14 +11,13 @@
  * 6. teacherEmails에 강사 Gmail을 넣으세요 (이 이메일만 강사 권한)
  */
 window.HINA_CONFIG = {
-  firebase: null,
-  // firebase: {
-  //   apiKey: "AIzaSy...",
-  //   authDomain: "hina-class.firebaseapp.com",
-  //   projectId: "hina-class",
-  //   storageBucket: "hina-class.appspot.com",
-  //   messagingSenderId: "123456789",
-  //   appId: "1:123456789:web:abcdef"
-  // },
+  firebase: {
+    apiKey: "AIzaSyDPi4lLYi9nJGUyElJmA6bFMl-vWsdCT8E",
+    authDomain: "hina-class.firebaseapp.com",
+    projectId: "hina-class",
+    storageBucket: "hina-class.firebasestorage.app",
+    messagingSenderId: "210145740964",
+    appId: "1:210145740964:web:4711ecb47b77a73317be31"
+  },
   teacherEmails: ["sonhyogi0078@gmail.com"],
 };
