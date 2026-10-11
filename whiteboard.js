@@ -19,9 +19,10 @@ const setStatus = (t, color) => {
   statusEl.style.border = color ? `2px solid ${color}` : 'none';
 };
 
-let db = null;
+let db = null, auth = null;
 if (!isDemo) {
   firebase.initializeApp(window.HINA_CONFIG.firebase);
+  auth = firebase.auth();
   db = firebase.firestore();
 }
 setStatus(isDemo ? '데모 모드 (동기화 없음)' : '연결 중…');
@@ -30,6 +31,63 @@ document.getElementById('back').addEventListener('click', () => { location.href 
 
 // Firestore는 undefined 값을 못 넣으므로 제거
 const clean = (rec) => JSON.parse(JSON.stringify(rec));
+
+// 같은 origin(index.html)에서 로그인한 세션이 복원될 때까지 대기
+function waitForAuth() {
+  return new Promise((resolve) => {
+    const unsub = auth.onAuthStateChanged((u) => { unsub(); resolve(u); });
+  });
+}
+
+function startSync(editor) {
+  const shapesRef = db.collection('boards').doc(room).collection('shapes');
+
+  // 원격 변경 구독 (첫 스냅샷 = 초기 로드)
+  let firstSnap = true;
+  shapesRef.onSnapshot((snap) => {
+    const puts = [], removes = [];
+    snap.docChanges().forEach((ch) => {
+      if (ch.type === 'removed') removes.push(ch.doc.id);
+      else puts.push(ch.doc.data());
+    });
+    if (puts.length || removes.length) {
+      editor.store.mergeRemoteChanges(() => {
+        if (puts.length) editor.store.put(puts);
+        if (removes.length) editor.store.remove(removes);
+      });
+    }
+    if (firstSnap) {
+      firstSnap = false;
+      setStatus(mode === 'edit' ? '● 실시간 동시 그리기 연결됨' : '● 실시간 보는 중', '#3fb950');
+    }
+  }, () => setStatus('연결 실패 — 새로고침 해주세요', '#f85149'));
+
+  // 로컬 변경 → Firestore (추가/삭제 즉시, 수정은 250ms 디바운스 batch)
+  if (mode === 'edit') {
+    const pending = new Map(); // recordId -> record
+    let timer = null;
+    const flush = () => {
+      timer = null;
+      if (!pending.size) return;
+      const batch = db.batch();
+      pending.forEach((rec, id) => batch.set(shapesRef.doc(id), clean(rec), { merge: true }));
+      pending.clear();
+      batch.commit().catch((e) => console.warn('shape save failed', e));
+    };
+    editor.store.listen(({ changes }) => {
+      const removedIds = Object.keys(changes.removed);
+      if (removedIds.length) {
+        const batch = db.batch();
+        removedIds.forEach((id) => batch.delete(shapesRef.doc(id)));
+        batch.commit().catch((e) => console.warn('shape delete failed', e));
+      }
+      Object.values(changes.added).forEach((rec) => pending.set(rec.id, rec));
+      Object.values(changes.updated).forEach(([, to]) => pending.set(to.id, to));
+      if (pending.size && !timer) timer = setTimeout(flush, 250);
+    }, { scope: 'document', source: 'user' });
+    window.addEventListener('beforeunload', () => { if (timer) { clearTimeout(timer); flush(); } });
+  }
+}
 
 function Board() {
   const onMount = (editor) => {
@@ -42,53 +100,14 @@ function Board() {
       return;
     }
 
-    const shapesRef = db.collection('boards').doc(room).collection('shapes');
-
-    // 원격 변경 구독 (첫 스냅샷 = 초기 로드)
-    let firstSnap = true;
-    shapesRef.onSnapshot((snap) => {
-      const puts = [], removes = [];
-      snap.docChanges().forEach((ch) => {
-        if (ch.type === 'removed') removes.push(ch.doc.id);
-        else puts.push(ch.doc.data());
-      });
-      if (puts.length || removes.length) {
-        editor.store.mergeRemoteChanges(() => {
-          if (puts.length) editor.store.put(puts);
-          if (removes.length) editor.store.remove(removes);
-        });
+    setStatus('로그인 확인 중…');
+    waitForAuth().then((user) => {
+      if (!user) {
+        setStatus('로그인이 필요합니다 — 메인 페이지에서 먼저 로그인하세요', '#f85149');
+        return;
       }
-      if (firstSnap) {
-        firstSnap = false;
-        setStatus(mode === 'edit' ? '● 실시간 동시 그리기 연결됨' : '● 실시간 보는 중', '#3fb950');
-      }
-    }, () => setStatus('연결 실패 — 새로고침 해주세요', '#f85149'));
-
-    // 로컬 변경 → Firestore (추가/삭제 즉시, 수정은 도형별 250ms 디바운스)
-    if (mode === 'edit') {
-      const pending = new Map(); // recordId -> record
-      let timer = null;
-      const flush = () => {
-        timer = null;
-        if (!pending.size) return;
-        const batch = db.batch();
-        pending.forEach((rec, id) => batch.set(shapesRef.doc(id), clean(rec), { merge: true }));
-        pending.clear();
-        batch.commit().catch((e) => console.warn('shape save failed', e));
-      };
-      editor.store.listen(({ changes }) => {
-        const removedIds = Object.keys(changes.removed);
-        if (removedIds.length) {
-          const batch = db.batch();
-          removedIds.forEach((id) => batch.delete(shapesRef.doc(id)));
-          batch.commit().catch((e) => console.warn('shape delete failed', e));
-        }
-        Object.values(changes.added).forEach((rec) => pending.set(rec.id, rec));
-        Object.values(changes.updated).forEach(([, to]) => pending.set(to.id, to));
-        if (pending.size && !timer) timer = setTimeout(flush, 250);
-      }, { scope: 'document', source: 'user' });
-      window.addEventListener('beforeunload', () => { if (timer) { clearTimeout(timer); flush(); } });
-    }
+      startSync(editor);
+    });
   };
 
   return React.createElement(Tldraw, { onMount, autoFocus: mode === 'edit' });
