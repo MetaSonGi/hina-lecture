@@ -1,4 +1,4 @@
-/* 와글보드 화이트보드 — tldraw + Firestore 도형 단위 실시간 동기화
+/* 메타송이 클래스 화이트보드 — tldraw + Firestore 도형 단위 실시간 동기화
  *
  * 반별 보드 1개, 강사·학생 동시 그리기 지원 (위크벤치 스타일).
  * 구조: boards/{room}/shapes/{recordId} — 도형 1개 = 문서 1개.
