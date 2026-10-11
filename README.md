@@ -12,14 +12,22 @@
 - **주차별 자료**: 드라이브 공유 링크 등록 (학생은 보기 전용)
 - **자료실 링크**: 유용한 링크 공유
 - **과제**: 제목·설명·마감일·Git 허용 여부 설정 → **학생별 제출 현황** 확인
-- **화이트보드**: tldraw 편집 → 학생 화면에 실시간 공유
-  - 강사 공용 보드: 강사가 그리면 전원에게 실시간 공유 (학생은 보기 전용)
-  - 학생 개인 보드: 학생이 직접 그리기 가능 → 강사가 학생별로 열어볼 수 있음
+- **화이트보드**: tldraw 실시간 **동시 그리기**
+  - 반별 보드 1개 — 강사·학생이 동시에 그릴 수 있음 (위크벤치 스타일)
+  - 도형 단위 Firestore 동기화 (`boards/{반ID}/shapes/{도형ID}`): 각자 그린 도형이 따로 저장되어 덮어쓰지 않음
 
 ### 🧑‍🎓 학생
 - 로그인 후 강사 승인 대기 → 반 입장
 - 주차별 강의 자료 보기, 자료실 링크, 과제 제출(링크 or Git URL)
-- 화이트보드 실시간 시청 + 내 보드 그리기
+- 화이트보드 실시간 동시 그리기 참여
+
+## 화이트보드 동시 그리기 방식
+
+스냅샷 통째 저장(구 방식)은 여러 명이 동시에 그리면 마지막 저장자가 덮어써버린다.
+그래서 도형 단위로 쪼개서 저장한다: `boards/{room}/shapes/{recordId}`.
+tldraw의 `store.listen({scope:'document', source:'user'})`로 변경분을 감지해
+추가/삭제는 즉시, 수정은 도형별 250ms 디바운스로 batch write.
+원격 변경은 `onSnapshot` + `mergeRemoteChanges`로 적용해 에코를 방지한다.
 
 ## 파일은 왜 드라이브 링크인가요?
 
@@ -107,11 +115,15 @@ service cloud.firestore {
         && request.resource.data.studentId == request.auth.uid;
       allow update, delete: if isTeacher();
     }
-    // 화이트보드 — 읽기: 로그인 사용자, 쓰기: 강사 + 본인 보드
+    // 화이트보드 — 반별 단일 보드, 도형 단위 실시간 동기화
     match /boards/{docId} {
       allow read: if signedIn();
       allow write: if isTeacher()
         || (signedIn() && docId.endsWith('__s_' + request.auth.uid));
+    }
+    match /boards/{room}/shapes/{shapeId} {
+      allow read: if signedIn();
+      allow write: if signedIn();
     }
   }
 }
