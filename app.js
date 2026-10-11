@@ -183,7 +183,6 @@
     if (DEMO) students = demoDb().users.filter((u) => u.role === 'student');
     else { const s = await db.collection('users').where('role', '==', 'student').get(); students = s.docs.map((d) => ({ uid: d.id, ...d.data() })); }
     tStudents = students;
-    populateBoardStudents();
     $('classRoster').innerHTML = tClasses.map((c) => {
       const members = students.filter((s) => s.classId === c.id);
       return `<div class="week-group"><div class="week-title">${esc(c.name)} (${members.length}명)</div>
@@ -337,21 +336,7 @@
 
   $('openBoardT').addEventListener('click', () => {
     const room = $('boardClass').value || tClasses[0]?.id || 'demo';
-    location.href = `whiteboard.html?room=${encodeURIComponent(room)}&board=main&mode=edit${DEMO ? '&demo=1' : ''}`;
-  });
-
-  function populateBoardStudents() {
-    const cid = $('boardClass').value;
-    const list = tStudents.filter((s) => s.classId === cid);
-    $('boardStudent').innerHTML = list.map((s) => `<option value="${esc(s.uid)}">${esc(s.name)}</option>`).join('')
-      || '<option value="">(이 반 학생 없음)</option>';
-  }
-  $('boardClass').addEventListener('change', populateBoardStudents);
-  $('viewStudentBoard').addEventListener('click', () => {
-    const uid = $('boardStudent').value;
-    if (!uid) { alert('학생을 선택하세요.'); return; }
-    const room = $('boardClass').value || 'demo';
-    location.href = `whiteboard.html?room=${encodeURIComponent(room)}&board=s_${encodeURIComponent(uid)}&mode=view${DEMO ? '&demo=1' : ''}`;
+    location.href = `whiteboard.html?room=${encodeURIComponent(room)}&mode=edit${DEMO ? '&demo=1' : ''}`;
   });
 
   /* ================= 학생 ================= */
@@ -404,10 +389,7 @@
     $('sAssignList').querySelectorAll('[data-submit]').forEach((b) => b.addEventListener('click', () => submitAssignment(b.dataset.submit)));
 
     $('openBoardS').addEventListener('click', () => {
-      location.href = `whiteboard.html?room=${encodeURIComponent(user.classId || 'demo')}&board=main&mode=view${DEMO ? '&demo=1' : ''}`;
-    });
-    $('openMyBoard').addEventListener('click', () => {
-      location.href = `whiteboard.html?room=${encodeURIComponent(user.classId || 'demo')}&board=s_${encodeURIComponent(user.uid)}&mode=edit${DEMO ? '&demo=1' : ''}`;
+      location.href = `whiteboard.html?room=${encodeURIComponent(user.classId || 'demo')}&mode=edit${DEMO ? '&demo=1' : ''}`;
     });
   }
 

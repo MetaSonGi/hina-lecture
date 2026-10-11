@@ -1,6 +1,8 @@
-/* 히나 클래스 화이트보드 — tldraw + Firestore 스냅샷 실시간 공유
- * board=main        → 강사 공용 보드 (강사 편집 → 전원에게 공유)
- * board=s_<uid>     → 학생 개인 보드 (학생이 그림, 강사가 볼 수 있음)
+/* 히나 클래스 화이트보드 — tldraw + Firestore 도형 단위 실시간 동기화
+ *
+ * 반별 보드 1개, 강사·학생 동시 그리기 지원 (위크벤치 스타일).
+ * 구조: boards/{room}/shapes/{recordId} — 도형 1개 = 문서 1개.
+ * 각자 그린 도형이 따로 저장되므로 동시에 그려도 덮어쓰지 않는다.
  */
 import { Tldraw } from 'https://esm.sh/@tldraw/tldraw@3.13.0?deps=react@18.3.1,react-dom@18.3.1';
 import React from 'https://esm.sh/react@18.3.1';
@@ -8,10 +10,8 @@ import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client?deps=react@18
 
 const qs = new URLSearchParams(location.search);
 const room = qs.get('room') || 'demo';
-const board = qs.get('board') || 'main';
-const mode = qs.get('mode') || 'view'; // edit | view
+const mode = qs.get('mode') || 'edit'; // edit | view
 const isDemo = qs.get('demo') === '1' || !window.HINA_CONFIG?.firebase;
-const docId = board === 'main' ? room : `${room}__${board}`;
 
 const statusEl = document.getElementById('status');
 const setStatus = (t, color) => {
@@ -28,14 +28,8 @@ setStatus(isDemo ? '데모 모드 (동기화 없음)' : '연결 중…');
 
 document.getElementById('back').addEventListener('click', () => { location.href = 'index.html'; });
 
-let saveTimer = null;
-let applyingRemote = false;
-
-function statusFor() {
-  if (isDemo) return mode === 'edit' ? '✏️ 그리기 모드 (데모)' : '👀 보기 모드 (데모)';
-  if (board === 'main') return mode === 'edit' ? '● 강사 보드 공유 중' : '● 강사 보드 보는 중';
-  return mode === 'edit' ? '✏️ 내 보드 (자동 저장됨)' : '👀 학생 보드 보는 중';
-}
+// Firestore는 undefined 값을 못 넣으므로 제거
+const clean = (rec) => JSON.parse(JSON.stringify(rec));
 
 function Board() {
   const onMount = (editor) => {
@@ -44,42 +38,56 @@ function Board() {
     }
 
     if (isDemo) {
-      setStatus(statusFor(), '#888');
+      setStatus(mode === 'edit' ? '✏️ 그리기 모드 (데모)' : '👀 보기 모드 (데모)', '#888');
       return;
     }
 
-    const docRef = db.collection('boards').doc(docId);
+    const shapesRef = db.collection('boards').doc(room).collection('shapes');
 
-    docRef.get().then((snap) => {
-      if (snap.exists && snap.data().snapshot) {
-        try {
-          applyingRemote = true;
-          editor.store.loadSnapshot(snap.data().snapshot);
-        } catch (e) { console.warn('snapshot load failed', e); }
-        applyingRemote = false;
+    // 원격 변경 구독 (첫 스냅샷 = 초기 로드)
+    let firstSnap = true;
+    shapesRef.onSnapshot((snap) => {
+      const puts = [], removes = [];
+      snap.docChanges().forEach((ch) => {
+        if (ch.type === 'removed') removes.push(ch.doc.id);
+        else puts.push(ch.doc.data());
+      });
+      if (puts.length || removes.length) {
+        editor.store.mergeRemoteChanges(() => {
+          if (puts.length) editor.store.put(puts);
+          if (removes.length) editor.store.remove(removes);
+        });
       }
-      setStatus(statusFor(), '#3fb950');
-    }).catch(() => setStatus('연결 실패 — 새로고침 해주세요', '#f85149'));
+      if (firstSnap) {
+        firstSnap = false;
+        setStatus(mode === 'edit' ? '● 실시간 동시 그리기 연결됨' : '● 실시간 보는 중', '#3fb950');
+      }
+    }, () => setStatus('연결 실패 — 새로고침 해주세요', '#f85149'));
 
+    // 로컬 변경 → Firestore (추가/삭제 즉시, 수정은 도형별 250ms 디바운스)
     if (mode === 'edit') {
-      editor.store.listen(() => {
-        if (applyingRemote) return;
-        clearTimeout(saveTimer);
-        saveTimer = setTimeout(() => {
-          try {
-            docRef.set({ snapshot: editor.store.getSnapshot(), updatedAt: Date.now() }, { merge: true });
-          } catch (e) { console.warn('snapshot save failed', e); }
-        }, 2000);
-      });
-    } else {
-      docRef.onSnapshot((snap) => {
-        if (!snap.exists || !snap.data().snapshot) return;
-        try {
-          applyingRemote = true;
-          editor.store.loadSnapshot(snap.data().snapshot);
-        } catch (e) { console.warn('snapshot apply failed', e); }
-        applyingRemote = false;
-      });
+      const pending = new Map(); // recordId -> record
+      let timer = null;
+      const flush = () => {
+        timer = null;
+        if (!pending.size) return;
+        const batch = db.batch();
+        pending.forEach((rec, id) => batch.set(shapesRef.doc(id), clean(rec), { merge: true }));
+        pending.clear();
+        batch.commit().catch((e) => console.warn('shape save failed', e));
+      };
+      editor.store.listen(({ changes }) => {
+        const removedIds = Object.keys(changes.removed);
+        if (removedIds.length) {
+          const batch = db.batch();
+          removedIds.forEach((id) => batch.delete(shapesRef.doc(id)));
+          batch.commit().catch((e) => console.warn('shape delete failed', e));
+        }
+        Object.values(changes.added).forEach((rec) => pending.set(rec.id, rec));
+        Object.values(changes.updated).forEach(([, to]) => pending.set(to.id, to));
+        if (pending.size && !timer) timer = setTimeout(flush, 250);
+      }, { scope: 'document', source: 'user' });
+      window.addEventListener('beforeunload', () => { if (timer) { clearTimeout(timer); flush(); } });
     }
   };
 
