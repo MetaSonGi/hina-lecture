@@ -183,11 +183,54 @@
     if (DEMO) students = demoDb().users.filter((u) => u.role === 'student');
     else { const s = await db.collection('users').where('role', '==', 'student').get(); students = s.docs.map((d) => ({ uid: d.id, ...d.data() })); }
     tStudents = students;
+    const unassigned = students.filter((s) => !s.classId);
     $('classRoster').innerHTML = tClasses.map((c) => {
       const members = students.filter((s) => s.classId === c.id);
-      return `<div class="week-group"><div class="week-title">${esc(c.name)} (${members.length}명)</div>
+      return `<div class="week-group"><div class="week-title">${esc(c.name)} (${members.length}명)
+        <button class="btn small ghost" data-delclass="${c.id}" data-name="${esc(c.name)}" style="margin-left:8px">삭제</button></div>
         ${members.map((m) => `<div class="mat-item"><span>${esc(m.name)} <span class="meta">${esc(m.email)}</span></span></div>`).join('') || '<p class="hint">학생 없음</p>'}</div>`;
-    }).join('');
+    }).join('') + (unassigned.length ? `<div class="week-group"><div class="week-title">미배정 (${unassigned.length}명)</div>
+      ${unassigned.map((m) => `<div class="mat-item"><span>${esc(m.name)} <span class="meta">${esc(m.email)}</span></span></div>`).join('')}</div>` : '');
+    $('classRoster').querySelectorAll('[data-delclass]').forEach((b) =>
+      b.addEventListener('click', () => delClass(b.dataset.delclass, b.dataset.name)));
+  }
+
+  // 반 삭제: 관련 자료·링크·과제·제출·보드 도형까지 함께 삭제, 소속 학생은 미배정
+  async function delClass(id, name) {
+    const members = tStudents.filter((s) => s.classId === id);
+    if (!confirm(`'${name}' 반을 삭제할까요?\n자료·과제·화이트보드도 함께 지워집니다.${members.length ? `\n학생 ${members.length}명은 미배정 상태가 됩니다.` : ''}`)) return;
+    if (DEMO) {
+      const d = demoDb();
+      d.classes = d.classes.filter((c) => c.id !== id);
+      d.materials = d.materials.filter((m) => m.classId !== id);
+      d.links = d.links.filter((l) => l.classId !== id);
+      const aids = d.assignments.filter((a) => a.classId === id).map((a) => a.id);
+      d.assignments = d.assignments.filter((a) => a.classId !== id);
+      d.submissions = d.submissions.filter((s) => !aids.includes(s.assignmentId));
+      d.users.forEach((u) => { if (u.classId === id) u.classId = null; });
+      demoSave(d);
+    } else {
+      const [mats, links, assigns, shapes] = await Promise.all([
+        db.collection('materials').where('classId', '==', id).get(),
+        db.collection('links').where('classId', '==', id).get(),
+        db.collection('assignments').where('classId', '==', id).get(),
+        db.collection('boards').doc(id).collection('shapes').get(),
+      ]);
+      const batch = db.batch();
+      mats.forEach((x) => batch.delete(x.ref));
+      links.forEach((x) => batch.delete(x.ref));
+      const aids = [];
+      assigns.forEach((x) => { aids.push(x.id); batch.delete(x.ref); });
+      for (const aid of aids) {
+        const subs = await db.collection('submissions').where('assignmentId', '==', aid).get();
+        subs.forEach((x) => batch.delete(x.ref));
+      }
+      members.forEach((s) => batch.update(db.collection('users').doc(s.uid), { classId: null }));
+      shapes.forEach((x) => batch.delete(x.ref));
+      batch.delete(db.collection('classes').doc(id));
+      await batch.commit();
+    }
+    initTeacher();
   }
 
   // --- 주차별 자료 (드라이브 공유 링크 방식 — Storage 무료 플랜 미지원 대체) ---
