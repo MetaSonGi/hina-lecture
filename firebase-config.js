@@ -1,4 +1,4 @@
-/* 히나 클래스 — Firebase 설정
+/* 와글보드 — Firebase 설정
  *
  * 이 파일은 공개 저장소에 올라갑니다.
  * firebaseConfig의 apiKey는 Firebase 웹 앱의 공개용 키이므로 노출되어도

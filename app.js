@@ -1,4 +1,4 @@
-/* 히나 클래스 — 강사/학생 강의 플랫폼 (Firebase + 데모 모드) */
+/* 와글보드 — 강사/학생 실시간 강의 플랫폼 (Firebase + 데모 모드) */
 (function () {
   'use strict';
   const $ = (id) => document.getElementById(id);
