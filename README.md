@@ -1,9 +1,17 @@
-# 메타송이 클래스 🎨
+# 🎓 메타송이 클래스 | MetaSonGi Class
+
+> 실시간 강의 플랫폼 — 화이트보드·과제·Google 로그인  
+> Real-time lecture platform with whiteboard and assignments
+
+[![Live Demo](https://img.shields.io/badge/demo-live-brightgreen?style=flat-square)](https://metasongi.github.io/metasongi-class/) ![HTML5](https://img.shields.io/badge/HTML5-E34F26?style=flat-square) ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square) ![Firebase](https://img.shields.io/badge/Firebase-FFCA28?style=flat-square)
+
+🌐 **Live:** https://metasongi.github.io/metasongi-class/
+
+---
 
 강사·학생 강의 플랫폼. 강사 승인제 반 관리, tldraw 실시간 화이트보드,
 주차별 자료실(드라이브 링크), 링크 공유, 과제 제출(링크 or Git URL)까지.
 
-🌐 **바로 실행:** https://metasongi.github.io/hina-lecture/
 
 ## 기능
 
@@ -155,3 +163,9 @@ service cloud.firestore {
 - tldraw 3.x (ESM) — 스냅샷을 Firestore에 저장해 실시간 공유
 - 파일 저장: 구글 드라이브 공유 링크 (Storage 미사용)
 - Firebase 미연결 시 localStorage 데모 모드
+
+---
+
+## English Summary
+
+Real-time lecture platform with whiteboard and assignments.
