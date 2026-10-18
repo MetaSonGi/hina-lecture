@@ -199,12 +199,27 @@
     $('classRoster').innerHTML = tClasses.map((c) => {
       const members = students.filter((s) => s.classId === c.id);
       return `<div class="week-group"><div class="week-title">${esc(c.name)} (${members.length}명)
-        <button class="btn small ghost" data-delclass="${c.id}" data-name="${esc(c.name)}" style="margin-left:8px">삭제</button></div>
+        <button class="btn small ghost" data-renameclass="${c.id}" data-name="${esc(c.name)}" style="margin-left:8px">이름 변경</button>
+        <button class="btn small ghost" data-delclass="${c.id}" data-name="${esc(c.name)}" style="margin-left:4px">삭제</button></div>
         ${members.map((m) => `<div class="mat-item"><span>${esc(m.name)} <span class="meta">${esc(m.email)}</span></span></div>`).join('') || '<p class="hint">학생 없음</p>'}</div>`;
     }).join('') + (unassigned.length ? `<div class="week-group"><div class="week-title">미배정 (${unassigned.length}명)</div>
       ${unassigned.map((m) => `<div class="mat-item"><span>${esc(m.name)} <span class="meta">${esc(m.email)}</span></span></div>`).join('')}</div>` : '');
+    $('classRoster').querySelectorAll('[data-renameclass]').forEach((b) =>
+      b.addEventListener('click', () => renameClass(b.dataset.renameclass, b.dataset.name)));
     $('classRoster').querySelectorAll('[data-delclass]').forEach((b) =>
       b.addEventListener('click', () => delClass(b.dataset.delclass, b.dataset.name)));
+  }
+
+  // 반 이름 변경
+  async function renameClass(id, oldName) {
+    const name = prompt('반 새 이름', oldName);
+    if (name === null) return;
+    const newName = name.trim();
+    if (!newName) { alert('반 이름을 입력하세요.'); return; }
+    if (newName === oldName) return;
+    if (DEMO) { const d = demoDb(); const c = d.classes.find((x) => x.id === id); if (c) c.name = newName; demoSave(d); }
+    else await db.collection('classes').doc(id).update({ name: newName });
+    initTeacher();
   }
 
   // 반 삭제: 관련 자료·링크·과제·제출·보드 도형까지 함께 삭제, 소속 학생은 미배정
