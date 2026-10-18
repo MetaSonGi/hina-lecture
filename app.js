@@ -1031,7 +1031,7 @@
     refreshMyStats();
   }
 
-  /* ---------- 학생: 수료증 ---------- */
+  /* ---------- 학생: 이수증 ---------- */
   async function loadCert(cfg, stats) {
     const okP = stats.progressRate >= cfg.progressThreshold;
     const okA = stats.attendRate >= cfg.attendThreshold;
@@ -1050,19 +1050,28 @@
         출석률 ${cfg.attendThreshold}% 이상 ${okA ? '✅' : '⬜'} (내 출석률 ${stats.attendRate}%)</div>
         <div style="margin-top:12px">
           ${existing ? `<span class="pill done">발급 완료 (${esc(existing.issuedAtStr || '')})</span> ` : ''}
-          <button id="certIssue" class="btn primary" ${can ? '' : 'disabled'}>🏅 수료증 ${existing ? '다시 받기' : '발급받기'}</button>
+          <button id="certIssue" class="btn primary" ${can ? '' : 'disabled'}>🏅 이수증 ${existing ? '다시 받기' : '발급받기'}</button>
           ${can ? '' : '<p class="hint">기준을 모두 만족하면 발급 버튼이 활성화됩니다</p>'}
         </div>
       </div>`;
+    loadCert._last = existing;
     if (can) $('certIssue').addEventListener('click', () => issueCert(cfg, stats));
   }
 
+  function genCertNo(){
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let s = '';
+    for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)];
+    return `HGS-${new Date().getFullYear()}-${s}`;
+  }
   async function issueCert(cfg, stats) {
     const classes = await getClasses();
     const className = (classes.find((c) => c.id === user.classId) || {}).name || '메타송이 클래스';
+    const prevNo = (loadCert._last && loadCert._last.certNo) || null;
     const rec = {
       uid: user.uid, name: user.name, classId: user.classId, className,
       progressRate: stats.progressRate, attendRate: stats.attendRate, issuedAtStr: todayStr(),
+      certNo: prevNo || genCertNo(),
     };
     if (DEMO) {
       const d = demoDb();
@@ -1077,9 +1086,9 @@
     drawCert(rec);
     const a = document.createElement('a');
     a.href = $('certCanvas').toDataURL('image/png');
-    a.download = `수료증_${user.name}.png`;
+    a.download = `이수증_${user.name}.png`;
     document.body.appendChild(a); a.click(); a.remove();
-    alert('수료증을 발급했습니다! PNG 파일이 다운로드됩니다.');
+    alert('이수증을 발급했습니다! PNG 파일이 다운로드됩니다.');
     loadCert(cfg, stats);
   }
 
@@ -1090,18 +1099,40 @@
     ctx.strokeStyle = '#b8860b'; ctx.lineWidth = 10; ctx.strokeRect(30, 30, W - 60, H - 60);
     ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 3; ctx.strokeRect(55, 55, W - 110, H - 110);
     ctx.fillStyle = '#1a1a1a'; ctx.textAlign = 'center';
-    ctx.font = '700 92px "Noto Sans KR", "Apple SD Gothic Neo", sans-serif';
-    ctx.fillText('수 료 증', W / 2, 215);
-    ctx.font = '400 40px "Noto Sans KR", "Apple SD Gothic Neo", sans-serif';
-    ctx.fillText(`성명: ${rec.name}`, W / 2, 335);
-    ctx.font = '400 34px "Noto Sans KR", "Apple SD Gothic Neo", sans-serif';
-    ctx.fillText(`위 사람은 ${rec.className} 과정의 전 과정을 수료하였기에`, W / 2, 435);
+    const F = '"Noto Sans KR", "Apple SD Gothic Neo", sans-serif';
+    // 브랜드
+    ctx.font = `700 34px ${F}`; ctx.fillStyle = '#1a5fb4';
+    ctx.fillText('효기샘', W / 2, 140);
+    // 제목
+    ctx.font = `700 92px ${F}`; ctx.fillStyle = '#1a1a1a';
+    ctx.fillText('이 수 증', W / 2, 250);
+    // 성명
+    ctx.font = `400 40px ${F}`;
+    ctx.fillText(`성명: ${rec.name}`, W / 2, 350);
+    // 본문
+    ctx.font = `400 32px ${F}`;
+    ctx.fillText(`위 사람은 효기샘 ${rec.className} 과정을 성실히 이수하였기에`, W / 2, 440);
     ctx.fillText('이 증서를 수여합니다.', W / 2, 495);
-    ctx.font = '400 30px "Noto Sans KR", "Apple SD Gothic Neo", sans-serif'; ctx.fillStyle = '#555';
-    ctx.fillText(`진도율 ${rec.progressRate}% · 출석률 ${rec.attendRate}%`, W / 2, 575);
-    ctx.fillText(`발급일: ${rec.issuedAtStr}`, W / 2, 635);
-    ctx.font = '700 44px "Noto Sans KR", "Apple SD Gothic Neo", sans-serif'; ctx.fillStyle = '#e0509a';
-    ctx.fillText('🎨 메타송이 클래스', W / 2, 735);
+    // 실적·발급번호·발급일
+    ctx.font = `400 28px ${F}`; ctx.fillStyle = '#555';
+    ctx.fillText(`진도율 ${rec.progressRate}% · 출석률 ${rec.attendRate}%`, W / 2, 570);
+    ctx.fillText(`이수증 발급번호: ${rec.certNo || '-'}`, W / 2, 620);
+    ctx.fillText(`발급일: ${rec.issuedAtStr}`, W / 2, 670);
+    // 서명란 (우하단): 발급자명 + 직인
+    ctx.textAlign = 'right';
+    ctx.font = `400 34px ${F}`; ctx.fillStyle = '#1a1a1a';
+    ctx.fillText('효기샘 대표 손효기', W - 220, 745);
+    // 직인 (캔버스에 직접 그리기)
+    const sx = W - 190, sy = 660, ss = 110;
+    ctx.fillStyle = '#c0392b';
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(sx, sy, ss, ss, 12); else ctx.rect(sx, sy, ss, ss);
+    ctx.fill();
+    ctx.fillStyle = '#fdfbf3'; ctx.textAlign = 'center';
+    ctx.font = `700 34px ${F}`;
+    ctx.fillText('효기', sx + ss / 2, sy + 42);
+    ctx.fillText('샘印', sx + ss / 2, sy + 84);
+    ctx.textAlign = 'center';
   }
 
   /* ================= AI (Gemini BYOK) ================= */
