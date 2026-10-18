@@ -104,3 +104,38 @@ main { max-width: 1100px; margin: 0 auto; padding: 0 22px 40px; }
 .modal-box.wide { max-width: 900px; height: 85vh; display: flex; flex-direction: column; }
 .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 #pdfFrame { flex: 1; width: 100%; border: 1px solid #2d3748; border-radius: 8px; background: #fff; }
+
+/* ===== LMS (출석·진도·퀴즈·수료증) ===== */
+.tpanel input[type="text"], .tpanel input[type="url"], .tpanel input[type="number"],
+.tpanel input[type="date"], .tpanel select {
+  background: #0d1117; border: 1px solid #2d3748; color: #e6edf3;
+  border-radius: 10px; padding: 10px 12px; font-size: 13px;
+}
+.stat-cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.stat-card {
+  background: #0d1117; border: 1px solid #2d3748; border-radius: 12px;
+  padding: 14px 16px; min-width: 150px; flex: 1;
+}
+.stat-num { font-size: 26px; font-weight: 800; color: #ffb3d9; }
+.stat-label { font-size: 12px; color: #8b949e; margin: 2px 0 8px; }
+.stat-card .meta { color: #8b949e; font-size: 12px; margin-top: 6px; }
+.bar { background: #212b3d; border-radius: 8px; height: 14px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: linear-gradient(90deg, #e0509a, #9a5fe0); border-radius: 8px; }
+.bar.mini { height: 10px; margin-bottom: 4px; }
+.table-wrap { overflow-x: auto; }
+.lms-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
+.lms-table th, .lms-table td { border: 1px solid #2d3748; padding: 8px 10px; text-align: center; }
+.lms-table th { background: #161b22; color: #ffb3d9; }
+.att-btns { display: flex; gap: 4px; justify-content: center; flex-wrap: wrap; }
+.att-btns .btn.small { padding: 6px 10px; }
+.quiz-q {
+  background: #0d1117; border: 1px solid #2d3748; border-radius: 12px;
+  padding: 14px; margin-bottom: 10px;
+}
+.quiz-q .hint { margin: 6px 0 0; }
+.choice-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-size: 14px; }
+.choice-row input[type="text"] { flex: 1; }
+@media (max-width: 640px) {
+  .stat-card { min-width: 44%; }
+  .lms-table { font-size: 12px; min-width: 520px; }
+}

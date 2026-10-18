@@ -34,9 +34,20 @@
         links: [{ id: 'l1', classId: 'c1', title: '수업 유튜브 채널', url: 'https://youtube.com' }],
         assignments: [{ id: 'a1', classId: 'c1', title: '1주차 과제', desc: '자기소개 페이지 만들기', due: '2026-10-18', allowGit: true }],
         submissions: [],
+        sessions: [], attendance: [], views: {},
+        quizzes: [], quizResults: [], certificates: [],
+        lmsConfig: { progressThreshold: 80, attendThreshold: 80 },
       };
       localStorage.setItem(DKEY, JSON.stringify(d));
     }
+    // 구 데모 DB 마이그레이션 (LMS 키 보정)
+    if (!Array.isArray(d.sessions)) d.sessions = [];
+    if (!Array.isArray(d.attendance)) d.attendance = [];
+    if (!d.views || typeof d.views !== 'object') d.views = {};
+    if (!Array.isArray(d.quizzes)) d.quizzes = [];
+    if (!Array.isArray(d.quizResults)) d.quizResults = [];
+    if (!Array.isArray(d.certificates)) d.certificates = [];
+    if (!d.lmsConfig) d.lmsConfig = { progressThreshold: 80, attendThreshold: 80 };
     return d;
   }
   function demoSave(d) { localStorage.setItem(DKEY, JSON.stringify(d)); }
@@ -146,8 +157,9 @@
   let tStudents = [];
   async function initTeacher() {
     tClasses = await getClasses();
-    ['classSelect', 'matClass', 'linkClass', 'asClass', 'boardClass'].forEach((id) => classOptions($(id), tClasses, tClasses[0]?.id));
-    loadPending(); loadRoster(); loadMaterials(); loadLinks(); loadAssignments(); loadDriveFolder();
+    ['classSelect', 'matClass', 'linkClass', 'asClass', 'boardClass', 'attClass', 'progClass', 'quizClass'].forEach((id) => classOptions($(id), tClasses, tClasses[0]?.id));
+    await Promise.all([loadPending(), loadRoster(), loadMaterials(), loadLinks(), loadAssignments(), loadDriveFolder()]);
+    initTeacherLms();
   }
 
   $('createClass').addEventListener('click', async () => {
@@ -202,19 +214,30 @@
     if (DEMO) {
       const d = demoDb();
       d.classes = d.classes.filter((c) => c.id !== id);
+      const delMids = new Set(d.materials.filter((m) => m.classId === id).map((m) => m.id));
       d.materials = d.materials.filter((m) => m.classId !== id);
       d.links = d.links.filter((l) => l.classId !== id);
       const aids = d.assignments.filter((a) => a.classId === id).map((a) => a.id);
       d.assignments = d.assignments.filter((a) => a.classId !== id);
       d.submissions = d.submissions.filter((s) => !aids.includes(s.assignmentId));
+      d.sessions = d.sessions.filter((s) => s.classId !== id);
+      d.attendance = d.attendance.filter((a) => a.classId !== id);
+      d.quizzes = d.quizzes.filter((q) => q.classId !== id);
+      d.quizResults = d.quizResults.filter((r) => r.classId !== id);
+      d.certificates = d.certificates.filter((c) => c.classId !== id);
+      Object.keys(d.views || {}).forEach((uid) => { delMids.forEach((mid) => { delete d.views[uid][mid]; }); });
       d.users.forEach((u) => { if (u.classId === id) u.classId = null; });
       demoSave(d);
     } else {
-      const [mats, links, assigns, shapes] = await Promise.all([
+      const [mats, links, assigns, shapes, sess, attRecs, quizRecs, qresRecs] = await Promise.all([
         db.collection('materials').where('classId', '==', id).get(),
         db.collection('links').where('classId', '==', id).get(),
         db.collection('assignments').where('classId', '==', id).get(),
         db.collection('boards').doc(id).collection('shapes').get(),
+        db.collection('classes').doc(id).collection('sessions').get(),
+        db.collection('classes').doc(id).collection('attendance').get(),
+        db.collection('classes').doc(id).collection('quizzes').get(),
+        db.collection('classes').doc(id).collection('quizResults').get(),
       ]);
       const batch = db.batch();
       mats.forEach((x) => batch.delete(x.ref));
@@ -227,6 +250,12 @@
       }
       members.forEach((s) => batch.update(db.collection('users').doc(s.uid), { classId: null }));
       shapes.forEach((x) => batch.delete(x.ref));
+      sess.forEach((x) => batch.delete(x.ref));
+      attRecs.forEach((x) => batch.delete(x.ref));
+      quizRecs.forEach((x) => batch.delete(x.ref));
+      qresRecs.forEach((x) => batch.delete(x.ref));
+      const certs = await db.collection('certificates').where('classId', '==', id).get();
+      certs.forEach((x) => batch.delete(x.ref));
       batch.delete(db.collection('classes').doc(id));
       await batch.commit();
     }
@@ -404,13 +433,16 @@
     }
 
     const weeks = [...new Set(mats.map((m) => m.week))].sort((a, b) => a - b);
+    sMats = mats; sAssigns = assigns; sSubs = subs; // LMS(진도율·체크리스트)용 캐시
     $('sMatList').innerHTML = weeks.map((w) => `
       <div class="week-group"><div class="week-title">${w}주차</div>
       ${mats.filter((m) => m.week === w).map((m) => `
         <div class="mat-item"><span>📄 ${esc(m.title)}</span>
-        <button class="btn small" data-openlink="${esc(m.url)}">보기</button></div>`).join('')}</div>`).join('')
+        <button class="btn small" data-openlink="${esc(m.url)}" data-matid="${m.id}">보기</button></div>`).join('')}</div>`).join('')
       || '<p class="hint">아직 올라온 자료가 없습니다</p>';
     bindOpenLink($('sMatList'));
+    // 자료 열람 기록 (진도율 추적용)
+    $('sMatList').querySelectorAll('[data-matid]').forEach((b) => b.addEventListener('click', () => recordView(b.dataset.matid)));
 
     $('sLinkList').innerHTML = links.map((l) => `
       <li><span>🔗 <a href="${esc(l.url)}" target="_blank" rel="noopener" style="color:#58a6ff">${esc(l.title)}</a></span></li>`).join('')
@@ -434,6 +466,8 @@
     $('openBoardS').addEventListener('click', () => {
       location.href = `whiteboard.html?room=${encodeURIComponent(user.classId || 'demo')}&mode=edit${DEMO ? '&demo=1' : ''}`;
     });
+
+    initStudentLms();
   }
 
   async function submitAssignment(assignId) {
@@ -450,4 +484,599 @@
       initStudent();
     } catch (e) { alert('제출 실패: ' + e.message); }
   }
+  /* ================= LMS: 출석·진도·퀴즈·수료증 ================= */
+  let sMats = [], sAssigns = [], sSubs = []; // 학생용 캐시 (진도율·체크리스트)
+  let quizQuestions = []; // 퀴즈 출제 임시 문항
+
+  const todayStr = () => {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  };
+  const pct = (a, b) => (b > 0 ? Math.round((a / b) * 100) : 100);
+  function fmtDateTime(t) {
+    if (!t) return '';
+    const d = t.toDate ? t.toDate() : new Date(t);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+
+  /* ---------- 공용 조회 ---------- */
+  async function getSessions(classId) {
+    if (DEMO) return demoDb().sessions.filter((s) => s.classId === classId).sort((a, b) => (a.date < b.date ? -1 : 1));
+    const s = await db.collection('classes').doc(classId).collection('sessions').orderBy('date').get();
+    return s.docs.map((d) => ({ id: d.id, ...d.data() }));
+  }
+  async function getAttendance(classId) {
+    if (DEMO) return demoDb().attendance.filter((a) => a.classId === classId);
+    const s = await db.collection('classes').doc(classId).collection('attendance').get();
+    return s.docs.map((d) => ({ id: d.id, ...d.data() }));
+  }
+  async function getQuizzes(classId, includeUnpublished) {
+    if (DEMO) {
+      const q = demoDb().quizzes.filter((x) => x.classId === classId);
+      return (includeUnpublished ? q : q.filter((x) => x.published)).sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1));
+    }
+    let q = db.collection('classes').doc(classId).collection('quizzes');
+    if (!includeUnpublished) q = q.where('published', '==', true);
+    const s = await q.get();
+    return s.docs.map((d) => ({ id: d.id, ...d.data() }));
+  }
+  async function getQuizResults(classId, uid) {
+    if (DEMO) {
+      let r = demoDb().quizResults.filter((x) => x.classId === classId);
+      if (uid) r = r.filter((x) => x.uid === uid);
+      return r;
+    }
+    let q = db.collection('classes').doc(classId).collection('quizResults');
+    if (uid) q = q.where('uid', '==', uid);
+    const s = await q.get();
+    return s.docs.map((d) => ({ id: d.id, ...d.data() }));
+  }
+  async function getLmsConfig() {
+    const def = { progressThreshold: 80, attendThreshold: 80 };
+    if (DEMO) return { ...def, ...demoDb().lmsConfig };
+    try {
+      const s = await db.collection('config').doc('lms').get();
+      return s.exists ? { ...def, ...s.data() } : def;
+    } catch (e) { console.warn('lms config load failed', e); return def; }
+  }
+  async function getClassStudents() {
+    if (DEMO) return demoDb().users.filter((u) => u.role === 'student');
+    if (tStudents.length) return tStudents;
+    const s = await db.collection('users').where('role', '==', 'student').get();
+    return s.docs.map((d) => ({ uid: d.id, ...d.data() }));
+  }
+
+  /* ---------- 학생별 통계 (진도율·출석률·퀴즈) ---------- */
+  async function computeStudentStats(classId, uid) {
+    let mats, assigns, subs, views, sessions, att, quizzes, results;
+    if (DEMO) {
+      const d = demoDb();
+      mats = d.materials.filter((m) => m.classId === classId);
+      assigns = d.assignments.filter((a) => a.classId === classId);
+      const aids = new Set(assigns.map((a) => a.id));
+      subs = d.submissions.filter((s) => s.studentId === uid && aids.has(s.assignmentId));
+      views = d.views[uid] || {};
+      sessions = d.sessions.filter((s) => s.classId === classId && s.date <= todayStr());
+      att = d.attendance.filter((a) => a.classId === classId && a.uid === uid);
+      quizzes = d.quizzes.filter((q) => q.classId === classId && q.published);
+      const qids = new Set(quizzes.map((q) => q.id));
+      results = d.quizResults.filter((r) => r.uid === uid && qids.has(r.quizId));
+    } else {
+      const [m, a, sb, v, ss, at, q, r] = await Promise.all([
+        db.collection('materials').where('classId', '==', classId).get(),
+        db.collection('assignments').where('classId', '==', classId).get(),
+        db.collection('submissions').where('studentId', '==', uid).get(),
+        db.collection('progress').doc(uid).collection('views').get(),
+        db.collection('classes').doc(classId).collection('sessions').where('date', '<=', todayStr()).get(),
+        db.collection('classes').doc(classId).collection('attendance').where('uid', '==', uid).get(),
+        db.collection('classes').doc(classId).collection('quizzes').where('published', '==', true).get(),
+        db.collection('classes').doc(classId).collection('quizResults').where('uid', '==', uid).get(),
+      ]);
+      mats = m.docs.map((d) => ({ id: d.id, ...d.data() }));
+      assigns = a.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const aids = new Set(assigns.map((x) => x.id));
+      subs = sb.docs.map((d) => d.data()).filter((s) => aids.has(s.assignmentId));
+      views = {}; v.forEach((d) => { views[d.id] = d.data(); });
+      sessions = ss.docs.map((d) => ({ id: d.id, ...d.data() }));
+      att = at.docs.map((d) => d.data());
+      quizzes = q.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const qids = new Set(quizzes.map((x) => x.id));
+      results = r.docs.map((d) => d.data()).filter((x) => qids.has(x.quizId));
+    }
+    const viewedIds = mats.filter((m) => views[m.id]).map((m) => m.id);
+    const submittedIds = assigns.filter((a) => subs.some((s) => s.assignmentId === a.id)).map((a) => a.id);
+    const progressRate = pct(viewedIds.length + submittedIds.length, mats.length + assigns.length);
+    const attBySession = {};
+    att.forEach((x) => { attBySession[x.sessionId] = x.status; });
+    let attScore = 0, present = 0, late = 0, absent = 0;
+    sessions.forEach((s) => {
+      const st = attBySession[s.id];
+      if (st === 'present') { attScore += 1; present++; }
+      else if (st === 'late') { attScore += 0.5; late++; }
+      else absent++;
+    });
+    const attendRate = pct(attScore, sessions.length);
+    const quizAvg = results.length
+      ? Math.round(results.reduce((s, x) => s + (x.score / x.total) * 100, 0) / results.length)
+      : null;
+    return {
+      progressRate, attendRate, viewedIds, submittedIds,
+      totalMats: mats.length, totalAssigns: assigns.length,
+      present, late, absent, totalSessions: sessions.length,
+      quizAvg, quizTaken: results.length, quizTotal: quizzes.length,
+    };
+  }
+
+  /* ---------- 강사: 출석 ---------- */
+  function initTeacherLms() {
+    $('sessDate').value = todayStr();
+    quizQuestions = []; renderQuizQList();
+    loadSessions(); loadProgTable(); loadQuizListT(); loadLmsConfigForm();
+  }
+  $('attClass').addEventListener('change', loadSessions);
+  $('progClass').addEventListener('change', loadProgTable);
+  $('progRefresh').addEventListener('click', loadProgTable);
+  $('quizClass').addEventListener('change', loadQuizListT);
+
+  $('sessionCreate').addEventListener('click', async () => {
+    const classId = $('attClass').value || tClasses[0]?.id;
+    const title = $('sessTitle').value.trim(), date = $('sessDate').value;
+    if (!classId) { alert('반을 먼저 만드세요.'); return; }
+    if (!title || !date) { alert('회차 제목과 날짜를 입력하세요.'); return; }
+    const doc = { classId, title, date, createdBy: user.uid };
+    if (DEMO) { const d = demoDb(); doc.id = nid('ss'); doc.createdAt = Date.now(); d.sessions.push(doc); demoSave(d); }
+    else await db.collection('classes').doc(classId).collection('sessions').add({ ...doc, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    $('sessTitle').value = '';
+    loadSessions();
+  });
+
+  async function loadSessions() {
+    const classId = $('attClass').value || tClasses[0]?.id;
+    if (!classId) { $('sessionList').innerHTML = '<p class="hint">반을 먼저 만드세요</p>'; return; }
+    $('sessionList').innerHTML = '<p class="hint">불러오는 중…</p>';
+    const [sessions, att, students] = await Promise.all([getSessions(classId), getAttendance(classId), getClassStudents()]);
+    const clsStudents = students.filter((s) => s.classId === classId);
+    const attMap = {};
+    att.forEach((a) => { attMap[a.sessionId + '_' + a.uid] = a; });
+    $('sessionList').innerHTML = sessions.map((ss) => {
+      const rows = clsStudents.map((st) => {
+        const rec = attMap[ss.id + '_' + st.uid];
+        const cur = rec ? rec.status : '';
+        const mark = rec
+          ? `<span class="meta">${rec.by === 'self' ? '셀프' : '강사'} · ${esc(fmtDateTime(rec.checkedAt))}</span>`
+          : '<span class="meta">미체크</span>';
+        return `<tr><td style="text-align:left">${esc(st.name)}</td><td>${mark}</td>
+          <td><div class="att-btns">
+            <button class="btn small ${cur === 'present' ? 'primary' : ''}" data-att="${ss.id}|${st.uid}|present">출석</button>
+            <button class="btn small ${cur === 'late' ? 'primary' : ''}" data-att="${ss.id}|${st.uid}|late">지각</button>
+            <button class="btn small ${cur === 'absent' ? 'primary' : ''}" data-att="${ss.id}|${st.uid}|absent">결석</button>
+          </div></td></tr>`;
+      }).join('') || '<tr><td colspan="3"><span class="meta">이 반에 학생이 없습니다</span></td></tr>';
+      return `<div class="assign-card"><h3>🗓️ ${esc(ss.title)} <span class="meta">${esc(ss.date)}</span>
+        <button class="btn small ghost" data-delsess="${ss.id}" style="margin-left:8px">삭제</button></h3>
+        <div class="table-wrap"><table class="lms-table"><tr><th>학생</th><th>체크 정보</th><th>출석 처리</th></tr>${rows}</table></div></div>`;
+    }).join('') || '<p class="hint">만든 회차가 없습니다</p>';
+    $('sessionList').querySelectorAll('[data-att]').forEach((b) => b.addEventListener('click', () => {
+      const [sid, uid, status] = b.dataset.att.split('|');
+      const st = clsStudents.find((x) => x.uid === uid);
+      markAttendance(classId, sid, uid, st ? st.name : '', status);
+    }));
+    $('sessionList').querySelectorAll('[data-delsess]').forEach((b) => b.addEventListener('click', () => delSession(classId, b.dataset.delsess)));
+  }
+
+  async function markAttendance(classId, sessionId, uid, name, status) {
+    if (DEMO) {
+      const d = demoDb();
+      const i = d.attendance.findIndex((a) => a.sessionId === sessionId && a.uid === uid);
+      if (i >= 0) d.attendance[i] = { ...d.attendance[i], status, checkedAt: Date.now(), by: 'teacher' };
+      else d.attendance.push({ id: sessionId + '_' + uid, classId, sessionId, uid, name, status, checkedAt: Date.now(), by: 'teacher' });
+      demoSave(d);
+    } else {
+      await db.collection('classes').doc(classId).collection('attendance').doc(sessionId + '_' + uid)
+        .set({ classId, sessionId, uid, name, status, by: 'teacher', checkedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    }
+    loadSessions();
+  }
+
+  async function delSession(classId, sessionId) {
+    if (!confirm('이 회차와 출석 기록을 삭제할까요?')) return;
+    if (DEMO) {
+      const d = demoDb();
+      d.sessions = d.sessions.filter((s) => s.id !== sessionId);
+      d.attendance = d.attendance.filter((a) => a.sessionId !== sessionId);
+      demoSave(d);
+    } else {
+      const batch = db.batch();
+      batch.delete(db.collection('classes').doc(classId).collection('sessions').doc(sessionId));
+      const at = await db.collection('classes').doc(classId).collection('attendance').where('sessionId', '==', sessionId).get();
+      at.forEach((x) => batch.delete(x.ref));
+      await batch.commit();
+    }
+    loadSessions();
+  }
+
+  /* ---------- 강사: 반 학습 현황 ---------- */
+  async function loadProgTable() {
+    const classId = $('progClass').value || tClasses[0]?.id;
+    if (!classId) { $('progTable').innerHTML = '<p class="hint">반을 먼저 만드세요</p>'; return; }
+    $('progTable').innerHTML = '<p class="hint">계산 중…</p>';
+    const students = (await getClassStudents()).filter((s) => s.classId === classId);
+    const rows = [];
+    for (const st of students) {
+      rows.push({ st, stats: await computeStudentStats(classId, st.uid) });
+    }
+    rows.sort((a, b) => b.stats.progressRate - a.stats.progressRate);
+    $('progTable').innerHTML = `<div class="table-wrap"><table class="lms-table">
+      <tr><th>학생</th><th>진도율</th><th>출석률</th><th>퀴즈 평균</th><th>자료 열람</th><th>과제 제출</th></tr>
+      ${rows.map(({ st, stats }) => `<tr><td style="text-align:left">${esc(st.name)}</td>
+        <td><div class="bar mini"><i style="width:${stats.progressRate}%"></i></div>${stats.progressRate}%</td>
+        <td>${stats.attendRate}% <span class="meta">(${stats.present}출 ${stats.late}지 ${stats.absent}결)</span></td>
+        <td>${stats.quizAvg === null ? '<span class="meta">-</span>' : stats.quizAvg + '%'}</td>
+        <td>${stats.viewedIds.length}/${stats.totalMats}</td>
+        <td>${stats.submittedIds.length}/${stats.totalAssigns}</td></tr>`).join('')
+      || '<tr><td colspan="6"><span class="meta">이 반에 학생이 없습니다</span></td></tr>'}</table></div>`;
+  }
+
+  /* ---------- 강사: 퀴즈 출제 ---------- */
+  function renderQuizQList() {
+    $('quizQList').innerHTML = quizQuestions.map((qq, i) => `
+      <div class="quiz-q" data-qi="${i}">
+        <div class="row"><b>문항 ${i + 1}</b><span style="flex:1"></span>
+          <button class="btn small ghost" data-delq="${i}">삭제</button></div>
+        <input type="text" data-f="q" placeholder="질문을 입력하세요" value="${esc(qq.q)}" style="width:100%" />
+        ${qq.choices.map((c, j) => `
+          <div class="choice-row">
+            <input type="radio" name="qans${i}" data-f="ans" value="${j}" ${qq.answer === j ? 'checked' : ''} title="정답 표시" />
+            <input type="text" data-f="c${j}" placeholder="보기 ${j + 1}" value="${esc(c)}" style="flex:1" />
+          </div>`).join('')}
+        <p class="hint">○ 라디오 버튼으로 정답을 표시하세요</p>
+      </div>`).join('') || '<p class="hint">문항 추가 버튼으로 문제를 만드세요</p>';
+  }
+  $('quizAddQ').addEventListener('click', () => {
+    quizQuestions.push({ q: '', choices: ['', '', '', ''], answer: 0 });
+    renderQuizQList();
+  });
+  $('quizQList').addEventListener('input', (e) => {
+    const box = e.target.closest('.quiz-q'); if (!box) return;
+    const i = +box.dataset.qi, f = e.target.dataset.f;
+    if (f === 'q') quizQuestions[i].q = e.target.value;
+    else if (f && f[0] === 'c') quizQuestions[i].choices[+f.slice(1)] = e.target.value;
+  });
+  $('quizQList').addEventListener('change', (e) => {
+    const box = e.target.closest('.quiz-q'); if (!box) return;
+    if (e.target.dataset.f === 'ans') quizQuestions[+box.dataset.qi].answer = +e.target.value;
+  });
+  $('quizQList').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-delq]'); if (!b) return;
+    quizQuestions.splice(+b.dataset.delq, 1); renderQuizQList();
+  });
+
+  $('quizCreate').addEventListener('click', async () => {
+    const classId = $('quizClass').value || tClasses[0]?.id;
+    const title = $('quizTitle').value.trim();
+    if (!classId) { alert('반을 먼저 만드세요.'); return; }
+    if (!title) { alert('퀴즈 제목을 입력하세요.'); return; }
+    if (!quizQuestions.length) { alert('문항을 1개 이상 추가하세요.'); return; }
+    for (let i = 0; i < quizQuestions.length; i++) {
+      const qq = quizQuestions[i];
+      if (!qq.q.trim() || qq.choices.some((c) => !c.trim())) { alert(`문항 ${i + 1}의 질문과 보기 4개를 모두 입력하세요.`); return; }
+    }
+    const doc = {
+      classId, title, dueDate: $('quizDue').value || '',
+      published: $('quizPublished').checked,
+      questions: quizQuestions.map((qq) => ({ q: qq.q.trim(), choices: qq.choices.map((c) => c.trim()), answer: qq.answer })),
+      createdBy: user.uid,
+    };
+    if (DEMO) { const d = demoDb(); doc.id = nid('q'); doc.createdAt = Date.now(); d.quizzes.push(doc); demoSave(d); }
+    else await db.collection('classes').doc(classId).collection('quizzes').add({ ...doc, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    $('quizTitle').value = ''; $('quizDue').value = ''; $('quizPublished').checked = true;
+    quizQuestions = []; renderQuizQList();
+    loadQuizListT();
+  });
+
+  async function loadQuizListT() {
+    const classId = $('quizClass').value || tClasses[0]?.id;
+    if (!classId) { $('quizListT').innerHTML = '<p class="hint">반을 먼저 만드세요</p>'; return; }
+    $('quizListT').innerHTML = '<p class="hint">불러오는 중…</p>';
+    const [quizzes, results, students] = await Promise.all([
+      getQuizzes(classId, true), getQuizResults(classId), getClassStudents(),
+    ]);
+    const clsStudents = students.filter((s) => s.classId === classId);
+    $('quizListT').innerHTML = '<h2>출제된 퀴즈</h2>' + (quizzes.map((qz) => {
+      const rs = results.filter((r) => r.quizId === qz.id);
+      const avg = rs.length ? Math.round(rs.reduce((s, r) => s + (r.score / r.total) * 100, 0) / rs.length) : null;
+      const rows = clsStudents.map((st) => {
+        const r = rs.find((x) => x.uid === st.uid);
+        return `<div class="sub-row"><span>${esc(st.name)}</span>${r
+          ? `<span>${r.score}/${r.total}점 <span class="pill done">${Math.round((r.score / r.total) * 100)}점</span></span>`
+          : '<span class="no">미응시</span>'}</div>`;
+      }).join('');
+      return `<div class="assign-card"><h3>📝 ${esc(qz.title)}</h3>
+        <div class="meta">문항 ${qz.questions.length}개 · 마감: ${esc(qz.dueDate || '없음')} · ${qz.published ? '공개 중' : '비공개'} · 응시 ${rs.length}/${clsStudents.length}명${avg !== null ? ` · 평균 ${avg}점` : ''}</div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn small" data-pubquiz="${qz.id}" data-pub="${qz.published ? 0 : 1}">${qz.published ? '비공개로 전환' : '공개하기'}</button>
+          <button class="btn small ghost" data-delquiz="${qz.id}">삭제</button>
+        </div>${rows}</div>`;
+    }).join('') || '<p class="hint">출제한 퀴즈가 없습니다</p>');
+    $('quizListT').querySelectorAll('[data-delquiz]').forEach((b) => b.addEventListener('click', () => delQuiz(classId, b.dataset.delquiz)));
+    $('quizListT').querySelectorAll('[data-pubquiz]').forEach((b) => b.addEventListener('click', () => toggleQuizPub(classId, b.dataset.pubquiz, b.dataset.pub === '1')));
+  }
+
+  async function delQuiz(classId, quizId) {
+    if (!confirm('퀴즈와 응시 결과를 삭제할까요?')) return;
+    if (DEMO) {
+      const d = demoDb();
+      d.quizzes = d.quizzes.filter((q) => q.id !== quizId);
+      d.quizResults = d.quizResults.filter((r) => r.quizId !== quizId);
+      demoSave(d);
+    } else {
+      const batch = db.batch();
+      batch.delete(db.collection('classes').doc(classId).collection('quizzes').doc(quizId));
+      const rs = await db.collection('classes').doc(classId).collection('quizResults').where('quizId', '==', quizId).get();
+      rs.forEach((x) => batch.delete(x.ref));
+      await batch.commit();
+    }
+    loadQuizListT();
+  }
+  async function toggleQuizPub(classId, quizId, pub) {
+    if (DEMO) { const d = demoDb(); const q = d.quizzes.find((x) => x.id === quizId); if (q) q.published = pub; demoSave(d); }
+    else await db.collection('classes').doc(classId).collection('quizzes').doc(quizId).update({ published: pub });
+    loadQuizListT();
+  }
+
+  /* ---------- 강사: 수료 기준 ---------- */
+  async function loadLmsConfigForm() {
+    const cfg = await getLmsConfig();
+    $('cfgProg').value = cfg.progressThreshold;
+    $('cfgAttend').value = cfg.attendThreshold;
+  }
+  $('cfgSave').addEventListener('click', async () => {
+    const cfg = {
+      progressThreshold: Math.min(100, Math.max(0, +$('cfgProg').value || 0)),
+      attendThreshold: Math.min(100, Math.max(0, +$('cfgAttend').value || 0)),
+    };
+    if (DEMO) { const d = demoDb(); d.lmsConfig = cfg; demoSave(d); }
+    else await db.collection('config').doc('lms').set(cfg, { merge: true });
+    alert('수료 기준을 저장했습니다.');
+  });
+
+  /* ---------- 학생: 자료 열람 기록 ---------- */
+  async function recordView(matId) {
+    try {
+      if (DEMO) {
+        const d = demoDb();
+        d.views[user.uid] = d.views[user.uid] || {};
+        if (!d.views[user.uid][matId]) {
+          d.views[user.uid][matId] = { viewedAt: Date.now(), classId: user.classId };
+          demoSave(d);
+        }
+      } else {
+        await db.collection('progress').doc(user.uid).collection('views').doc(matId)
+          .set({ viewedAt: firebase.firestore.FieldValue.serverTimestamp(), classId: user.classId }, { merge: true });
+      }
+    } catch (e) { console.warn('view record failed', e); }
+  }
+
+  /* ---------- 학생: 내 학습 ---------- */
+  async function initStudentLms() {
+    if (!user.classId) {
+      $('myStats').innerHTML = '<p class="hint">배정된 반이 없습니다</p>';
+      $('myChecklist').innerHTML = ''; $('checkinList').innerHTML = '';
+      $('quizListS').innerHTML = ''; $('certBox').innerHTML = '';
+      return;
+    }
+    refreshMyStats();
+    loadCheckin();
+    loadQuizListS();
+  }
+
+  async function refreshMyStats() {
+    const cfg = await getLmsConfig();
+    const stats = await computeStudentStats(user.classId, user.uid);
+    renderMyStats(stats);
+    renderChecklist(stats);
+    loadCert(cfg, stats);
+  }
+
+  function renderMyStats(stats) {
+    $('myStats').innerHTML = `
+      <div class="stat-card"><div class="stat-num">${stats.progressRate}%</div><div class="stat-label">진도율</div>
+        <div class="bar"><i style="width:${stats.progressRate}%"></i></div>
+        <div class="meta">자료 ${stats.viewedIds.length}/${stats.totalMats} · 과제 ${stats.submittedIds.length}/${stats.totalAssigns}</div></div>
+      <div class="stat-card"><div class="stat-num">${stats.attendRate}%</div><div class="stat-label">출석률</div>
+        <div class="bar"><i style="width:${stats.attendRate}%"></i></div>
+        <div class="meta">출석 ${stats.present} · 지각 ${stats.late} · 결석 ${stats.absent} (회차 ${stats.totalSessions})</div></div>
+      <div class="stat-card"><div class="stat-num">${stats.quizAvg === null ? '-' : stats.quizAvg + '%'}</div><div class="stat-label">퀴즈 평균</div>
+        <div class="meta">${stats.quizTaken}/${stats.quizTotal} 응시</div></div>`;
+  }
+
+  function renderChecklist(stats) {
+    const weeks = [...new Set(sMats.map((m) => m.week))].sort((a, b) => a - b);
+    let html = '<h2 style="margin-top:20px">🗂️ 주차별 체크리스트</h2>';
+    html += weeks.map((w) => `<div class="week-group"><div class="week-title">${w}주차</div>` +
+      sMats.filter((m) => m.week === w).map((m) =>
+        `<div class="mat-item"><span>${stats.viewedIds.includes(m.id) ? '✅' : '⬜'} 📄 ${esc(m.title)}</span></div>`).join('') + '</div>').join('')
+      || '<p class="hint">등록된 자료가 없습니다</p>';
+    html += '<h2 style="margin-top:20px">📝 과제 제출 현황</h2>' +
+      (sAssigns.map((a) => {
+        const done = stats.submittedIds.includes(a.id);
+        return `<div class="mat-item"><span>${done ? '✅' : '⬜'} ${esc(a.title)}</span>${done ? '<span class="pill done">제출됨</span>' : `<span class="meta">마감: ${esc(a.due || '없음')}</span>`}</div>`;
+      }).join('') || '<p class="hint">등록된 과제가 없습니다</p>');
+    $('myChecklist').innerHTML = html;
+  }
+
+  async function getMyAttendance(classId) {
+    if (DEMO) return demoDb().attendance.filter((a) => a.classId === classId && a.uid === user.uid);
+    const s = await db.collection('classes').doc(classId).collection('attendance').where('uid', '==', user.uid).get();
+    return s.docs.map((d) => d.data());
+  }
+
+  async function loadCheckin() {
+    const classId = user.classId;
+    const sessions = (await getSessions(classId)).filter((s) => s.date === todayStr());
+    const mine = await getMyAttendance(classId);
+    const map = {}; mine.forEach((a) => { map[a.sessionId] = a; });
+    $('checkinList').innerHTML = sessions.map((ss) => {
+      const rec = map[ss.id];
+      const label = rec ? (rec.status === 'present' ? '출석' : rec.status === 'late' ? '지각' : '결석') : '';
+      return `<div class="mat-item"><span>🗓️ ${esc(ss.title)} <span class="meta">${esc(ss.date)}</span></span>
+        ${rec ? `<span class="pill done">${label} 완료</span>`
+          : `<button class="btn small primary" data-checkin="${ss.id}">출석하기</button>`}</div>`;
+    }).join('') || '<p class="hint">오늘 출석할 회차가 없습니다</p>';
+    $('checkinList').querySelectorAll('[data-checkin]').forEach((b) => b.addEventListener('click', () => selfCheckin(classId, b.dataset.checkin)));
+  }
+
+  async function selfCheckin(classId, sessionId) {
+    const mine = await getMyAttendance(classId);
+    if (mine.some((a) => a.sessionId === sessionId)) { alert('이미 출석했습니다.'); loadCheckin(); return; }
+    const doc = { classId, sessionId, uid: user.uid, name: user.name, status: 'present', by: 'self' };
+    if (DEMO) {
+      const d = demoDb();
+      d.attendance.push({ id: sessionId + '_' + user.uid, ...doc, checkedAt: Date.now() });
+      demoSave(d);
+    } else {
+      await db.collection('classes').doc(classId).collection('attendance').doc(sessionId + '_' + user.uid)
+        .set({ ...doc, checkedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    }
+    alert('출석 체크 완료!');
+    loadCheckin();
+  }
+
+  /* ---------- 학생: 퀴즈 응시 ---------- */
+  async function loadQuizListS() {
+    const classId = user.classId;
+    const [quizzes, results] = await Promise.all([getQuizzes(classId, false), getQuizResults(classId, user.uid)]);
+    $('quizListS').innerHTML = quizzes.map((qz) => {
+      const r = results.find((x) => x.quizId === qz.id);
+      const closed = qz.dueDate && qz.dueDate < todayStr();
+      return `<div class="assign-card"><h3>📝 ${esc(qz.title)}</h3>
+        <div class="meta">문항 ${qz.questions.length}개 · 마감: ${esc(qz.dueDate || '없음')}</div>
+        <div style="margin-top:8px">${r
+          ? `<span class="pill done">응시 완료</span> <b>${r.score}/${r.total}점</b> (${Math.round((r.score / r.total) * 100)}점)`
+          : closed ? '<span class="pill wait">마감됨</span>'
+          : `<button class="btn small primary" data-takequiz="${qz.id}">응시하기</button>`}</div></div>`;
+    }).join('') || '<p class="hint">공개된 퀴즈가 없습니다</p>';
+    $('quizListS').querySelectorAll('[data-takequiz]').forEach((b) => b.addEventListener('click', () => {
+      const qz = quizzes.find((x) => x.id === b.dataset.takequiz);
+      if (qz) takeQuiz(qz);
+    }));
+  }
+
+  function takeQuiz(qz) {
+    $('quizTake').innerHTML = `<div class="assign-card"><h3>📝 ${esc(qz.title)} — 응시 중</h3>
+      ${qz.questions.map((qq, i) => `<div class="quiz-q"><b>Q${i + 1}. ${esc(qq.q)}</b>
+        ${qq.choices.map((c, j) => `<label class="choice-row"><input type="radio" name="tq${i}" value="${j}" /> <span>${esc(c)}</span></label>`).join('')}
+      </div>`).join('')}
+      <div class="row"><button id="quizSubmitBtn" class="btn primary">제출하기</button>
+      <button id="quizCancelBtn" class="btn ghost">취소</button></div></div>`;
+    $('quizTake').scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    $('quizCancelBtn').addEventListener('click', () => { $('quizTake').innerHTML = ''; });
+    $('quizSubmitBtn').addEventListener('click', () => submitQuiz(qz));
+  }
+
+  async function submitQuiz(qz) {
+    const answers = qz.questions.map((_, i) => {
+      const sel = document.querySelector(`input[name="tq${i}"]:checked`);
+      return sel ? +sel.value : -1;
+    });
+    if (answers.some((a) => a < 0) && !confirm('풀지 않은 문항이 있습니다. 그래도 제출할까요?')) return;
+    let score = 0;
+    qz.questions.forEach((qq, i) => { if (answers[i] === qq.answer) score++; });
+    const doc = { classId: user.classId, quizId: qz.id, uid: user.uid, name: user.name, score, total: qz.questions.length, answers };
+    try {
+      if (DEMO) {
+        const d = demoDb();
+        if (d.quizResults.some((r) => r.quizId === qz.id && r.uid === user.uid)) { alert('이미 응시한 퀴즈입니다.'); return; }
+        d.quizResults.push({ id: qz.id + '_' + user.uid, ...doc, submittedAt: Date.now() });
+        demoSave(d);
+      } else {
+        // set()은 문서가 없으면 create, 있으면 update로 판정됨.
+        // 보안 규칙이 학생에게는 create만 허용하므로 재응시 set()은 거부됨 (1회 응시 강제)
+        await db.collection('classes').doc(user.classId).collection('quizResults').doc(qz.id + '_' + user.uid)
+          .set({ ...doc, submittedAt: firebase.firestore.FieldValue.serverTimestamp() });
+      }
+    } catch (e) {
+      alert(e && e.code === 'permission-denied' ? '이미 응시한 퀴즈입니다.' : '제출 실패: ' + e.message);
+      return;
+    }
+    $('quizTake').innerHTML = `<div class="assign-card" style="text-align:center"><h3>🎉 채점 완료</h3>
+      <p style="font-size:28px;font-weight:800;margin:8px 0">${score}/${qz.questions.length}점 (${Math.round((score / qz.questions.length) * 100)}점)</p></div>`;
+    loadQuizListS();
+    refreshMyStats();
+  }
+
+  /* ---------- 학생: 수료증 ---------- */
+  async function loadCert(cfg, stats) {
+    const okP = stats.progressRate >= cfg.progressThreshold;
+    const okA = stats.attendRate >= cfg.attendThreshold;
+    let existing = null;
+    if (DEMO) existing = demoDb().certificates.find((c) => c.uid === user.uid && c.classId === user.classId) || null;
+    else {
+      try {
+        const s = await db.collection('certificates').doc(user.uid + '_' + user.classId).get();
+        if (s.exists) existing = s.data();
+      } catch (e) { console.warn('cert load failed', e); }
+    }
+    const can = okP && okA;
+    $('certBox').innerHTML = `
+      <div class="assign-card">
+        <div class="meta">발급 기준 — 진도율 ${cfg.progressThreshold}% 이상 ${okP ? '✅' : '⬜'} (내 진도율 ${stats.progressRate}%) ·
+        출석률 ${cfg.attendThreshold}% 이상 ${okA ? '✅' : '⬜'} (내 출석률 ${stats.attendRate}%)</div>
+        <div style="margin-top:12px">
+          ${existing ? `<span class="pill done">발급 완료 (${esc(existing.issuedAtStr || '')})</span> ` : ''}
+          <button id="certIssue" class="btn primary" ${can ? '' : 'disabled'}>🏅 수료증 ${existing ? '다시 받기' : '발급받기'}</button>
+          ${can ? '' : '<p class="hint">기준을 모두 만족하면 발급 버튼이 활성화됩니다</p>'}
+        </div>
+      </div>`;
+    if (can) $('certIssue').addEventListener('click', () => issueCert(cfg, stats));
+  }
+
+  async function issueCert(cfg, stats) {
+    const classes = await getClasses();
+    const className = (classes.find((c) => c.id === user.classId) || {}).name || '메타송이 클래스';
+    const rec = {
+      uid: user.uid, name: user.name, classId: user.classId, className,
+      progressRate: stats.progressRate, attendRate: stats.attendRate, issuedAtStr: todayStr(),
+    };
+    if (DEMO) {
+      const d = demoDb();
+      const i = d.certificates.findIndex((c) => c.uid === user.uid && c.classId === user.classId);
+      const obj = { id: user.uid + '_' + user.classId, ...rec, issuedAt: Date.now() };
+      if (i >= 0) d.certificates[i] = obj; else d.certificates.push(obj);
+      demoSave(d);
+    } else {
+      await db.collection('certificates').doc(user.uid + '_' + user.classId)
+        .set({ ...rec, issuedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    }
+    drawCert(rec);
+    const a = document.createElement('a');
+    a.href = $('certCanvas').toDataURL('image/png');
+    a.download = `수료증_${user.name}.png`;
+    document.body.appendChild(a); a.click(); a.remove();
+    alert('수료증을 발급했습니다! PNG 파일이 다운로드됩니다.');
+    loadCert(cfg, stats);
+  }
+
+  function drawCert(rec) {
+    const cv = $('certCanvas'), ctx = cv.getContext('2d');
+    const W = 1200, H = 850;
+    ctx.fillStyle = '#fdfbf3'; ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = '#b8860b'; ctx.lineWidth = 10; ctx.strokeRect(30, 30, W - 60, H - 60);
+    ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 3; ctx.strokeRect(55, 55, W - 110, H - 110);
+    ctx.fillStyle = '#1a1a1a'; ctx.textAlign = 'center';
+    ctx.font = '700 92px "Noto Sans KR", "Apple SD Gothic Neo", sans-serif';
+    ctx.fillText('수 료 증', W / 2, 215);
+    ctx.font = '400 40px "Noto Sans KR", "Apple SD Gothic Neo", sans-serif';
+    ctx.fillText(`성명: ${rec.name}`, W / 2, 335);
+    ctx.font = '400 34px "Noto Sans KR", "Apple SD Gothic Neo", sans-serif';
+    ctx.fillText(`위 사람은 ${rec.className} 과정의 전 과정을 수료하였기에`, W / 2, 435);
+    ctx.fillText('이 증서를 수여합니다.', W / 2, 495);
+    ctx.font = '400 30px "Noto Sans KR", "Apple SD Gothic Neo", sans-serif'; ctx.fillStyle = '#555';
+    ctx.fillText(`진도율 ${rec.progressRate}% · 출석률 ${rec.attendRate}%`, W / 2, 575);
+    ctx.fillText(`발급일: ${rec.issuedAtStr}`, W / 2, 635);
+    ctx.font = '700 44px "Noto Sans KR", "Apple SD Gothic Neo", sans-serif'; ctx.fillStyle = '#e0509a';
+    ctx.fillText('🎨 메타송이 클래스', W / 2, 735);
+  }
+
 })();

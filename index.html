@@ -51,6 +51,7 @@
     <button class="tab" data-t="t-links">🔗 자료실 링크</button>
     <button class="tab" data-t="t-assign">📝 과제</button>
     <button class="tab" data-t="t-board">🖊️ 화이트보드</button>
+    <button class="tab" data-t="t-lms">📊 학습 관리</button>
   </nav>
   <main>
     <section id="t-approve" class="tpanel active">
@@ -118,6 +119,46 @@
       </div>
       <p class="hint">반별 보드 하나를 강사·학생이 동시에 그릴 수 있어요</p>
     </section>
+
+    <section id="t-lms" class="tpanel">
+      <h2>✅ 출석 관리</h2>
+      <div class="row">
+        <select id="attClass"></select>
+        <input type="text" id="sessTitle" placeholder="회차 제목 (예: 1회차 OT)" style="flex:1" />
+        <input type="date" id="sessDate" />
+        <button id="sessionCreate" class="btn small primary">➕ 회차 만들기</button>
+      </div>
+      <div id="sessionList"></div>
+
+      <h2>📊 반 학습 현황</h2>
+      <div class="row">
+        <select id="progClass"></select>
+        <button id="progRefresh" class="btn small">🔄 새로고침</button>
+      </div>
+      <div id="progTable"></div>
+
+      <h2>📝 퀴즈 출제</h2>
+      <div class="row">
+        <select id="quizClass"></select>
+        <input type="text" id="quizTitle" placeholder="퀴즈 제목" style="flex:1" />
+        <input type="date" id="quizDue" />
+        <label class="chk"><input type="checkbox" id="quizPublished" checked /> 즉시 공개</label>
+      </div>
+      <div id="quizQList"></div>
+      <div class="row">
+        <button id="quizAddQ" class="btn small">➕ 문항 추가</button>
+        <button id="quizCreate" class="btn small primary">📝 퀴즈 만들기</button>
+      </div>
+      <div id="quizListT"></div>
+
+      <h2>⚙️ 수료 기준</h2>
+      <div class="row">
+        <span>진도율</span><input type="number" id="cfgProg" min="0" max="100" value="80" style="width:70px" /> % 이상
+        <span>출석률</span><input type="number" id="cfgAttend" min="0" max="100" value="80" style="width:70px" /> % 이상
+        <button id="cfgSave" class="btn small primary">저장</button>
+      </div>
+      <p class="hint">두 기준을 모두 만족하면 학생 화면에 수료증 발급 버튼이 활성화됩니다</p>
+    </section>
   </main>
 </div>
 
@@ -132,6 +173,7 @@
     <button class="tab" data-t="s-links">🔗 자료실</button>
     <button class="tab" data-t="s-assign">📝 과제 제출</button>
     <button class="tab" data-t="s-board">🖊️ 화이트보드</button>
+    <button class="tab" data-t="s-lms">📊 내 학습</button>
   </nav>
   <main>
     <section id="s-material" class="tpanel active">
@@ -152,6 +194,19 @@
         <button id="openBoardS" class="btn primary">🖊️ 화이트보드 참여하기</button>
       </div>
       <p class="hint">같은 보드에 강사·학생이 동시에 그릴 수 있어요</p>
+    </section>
+    <section id="s-lms" class="tpanel">
+      <h2>📊 내 학습 현황</h2>
+      <div id="myStats" class="stat-cards"></div>
+      <div id="myChecklist"></div>
+      <h2>✅ 출석하기</h2>
+      <div id="checkinList"></div>
+      <h2>📝 퀴즈</h2>
+      <div id="quizListS"></div>
+      <div id="quizTake"></div>
+      <h2>🏅 수료증</h2>
+      <div id="certBox"></div>
+      <canvas id="certCanvas" width="1200" height="850" style="display:none"></canvas>
     </section>
   </main>
 </div>
