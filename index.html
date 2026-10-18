@@ -158,6 +158,31 @@
         <button id="cfgSave" class="btn small primary">저장</button>
       </div>
       <p class="hint">두 기준을 모두 만족하면 학생 화면에 수료증 발급 버튼이 활성화됩니다</p>
+
+      <h2>🤖 AI 퀴즈 생성기</h2>
+      <p class="hint">주제나 수업 내용을 붙여넣으면 AI가 객관식 문제를 만들어줍니다. 생성 후 문항을 검토·수정하고 "📝 퀴즈 만들기"로 등록하세요.</p>
+      <textarea id="aiQuizSrc" rows="4" placeholder="주제나 수업 내용을 붙여넣으세요 (예: HTML 기본 태그, form 요소와 input 타입 정리)" style="width:100%"></textarea>
+      <div class="row" style="margin-top:8px">
+        <span>문항 수</span><input type="number" id="aiQuizCount" min="1" max="20" value="5" style="width:70px" />
+        <span>난이도</span>
+        <select id="aiQuizLevel"><option value="쉬움">쉬움</option><option value="보통" selected>보통</option><option value="어려움">어려움</option></select>
+        <button id="aiQuizGen" class="btn small primary">✨ 문제 생성</button>
+      </div>
+      <div id="aiQuizPreview"></div>
+
+      <h2>🤖 AI 설정 (Gemini)</h2>
+      <div class="row">
+        <span>🔑 API 키</span>
+        <input type="password" id="aiKeyT" placeholder="Gemini API 키 붙여넣기" style="flex:1" />
+        <button id="aiKeySaveT" class="btn small">저장</button>
+      </div>
+      <p class="hint">키는 이 브라우저에만 저장되고 서버로 전송되지 않습니다. <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style="color:#58a6ff">Google AI Studio에서 무료 발급</a></p>
+      <p class="hint" style="margin-top:4px">📚 수업 지식 — AI 학습 도우미가 참고할 수업 요약을 입력하세요 (아래 저장 버튼으로 저장)</p>
+      <textarea id="aiKnowledge" rows="5" placeholder="예: 1주차 OT — HTML 기본 구조와 h1~h6, p, a 태그. 2주차 — form 요소와 input 타입 정리" style="width:100%"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="aiKnowledgeSave" class="btn small primary">💾 수업 지식 저장</button>
+      </div>
+      <p class="hint">자료가 드라이브 PDF라 AI가 직접 읽을 수 없습니다. 핵심 요약을 넣어주면 도우미 답변이 좋아져요.</p>
     </section>
   </main>
 </div>
@@ -196,6 +221,11 @@
       <p class="hint">같은 보드에 강사·학생이 동시에 그릴 수 있어요</p>
     </section>
     <section id="s-lms" class="tpanel">
+      <div class="row">
+        <span>🔑 Gemini API 키</span>
+        <input type="password" id="aiKeyS" placeholder="AI 기능용 (이 브라우저에만 저장)" style="flex:1" />
+        <button id="aiKeySaveS" class="btn small">저장</button>
+      </div>
       <h2>📊 내 학습 현황</h2>
       <div id="myStats" class="stat-cards"></div>
       <div id="myChecklist"></div>
@@ -207,10 +237,30 @@
       <h2>🏅 수료증</h2>
       <div id="certBox"></div>
       <canvas id="certCanvas" width="1200" height="850" style="display:none"></canvas>
+      <h2>💬 AI 학습 도우미</h2>
+      <p class="hint">수업 내용에 대해 질문해보세요. PDF 내용은 강사가 AI 설정에 요약을 넣어주면 더 잘 답해요.</p>
+      <div id="aiChatLog" class="chat-log"></div>
+      <div class="row">
+        <input type="text" id="aiChatInput" placeholder="질문을 입력하세요 (예: form 태그 안에 꼭 들어가야 하는 요소는?)" style="flex:1" />
+        <button id="aiChatSend" class="btn small primary">전송</button>
+      </div>
     </section>
   </main>
 </div>
 
 <script src="app.js"></script>
+
+<!-- ===== AI 과제 피드백 모달 ===== -->
+<div id="aiFbModal" class="modal" style="display:none">
+  <div class="modal-box">
+    <div class="modal-head"><b>🤖 AI 과제 피드백</b><button id="aiFbClose" class="btn small ghost">닫기</button></div>
+    <div id="aiFbMeta" class="meta" style="margin-bottom:8px;color:#8b949e;font-size:12px"></div>
+    <textarea id="aiFbText" rows="8" placeholder="AI가 생성한 피드백이 여기에 표시됩니다. 강사가 수정 후 저장하세요." style="width:100%"></textarea>
+    <div class="row" style="margin-top:10px;margin-bottom:0">
+      <button id="aiFbRegen" class="btn small">🔄 다시 생성</button>
+      <button id="aiFbSave" class="btn small primary">💾 저장</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

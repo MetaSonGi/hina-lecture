@@ -48,6 +48,7 @@
     if (!Array.isArray(d.quizResults)) d.quizResults = [];
     if (!Array.isArray(d.certificates)) d.certificates = [];
     if (!d.lmsConfig) d.lmsConfig = { progressThreshold: 80, attendThreshold: 80 };
+    if (typeof d.aiKnowledge !== 'string') d.aiKnowledge = '';
     return d;
   }
   function demoSave(d) { localStorage.setItem(DKEY, JSON.stringify(d)); }
@@ -155,6 +156,7 @@
   /* ================= 강사 ================= */
   let tClasses = [];
   let tStudents = [];
+  let tSubsMap = {}, tAssignsMap = {}; // AI 과제 피드백용 캐시
   async function initTeacher() {
     tClasses = await getClasses();
     ['classSelect', 'matClass', 'linkClass', 'asClass', 'boardClass', 'attClass', 'progClass', 'quizClass'].forEach((id) => classOptions($(id), tClasses, tClasses[0]?.id));
@@ -397,6 +399,8 @@
     }
     const cls = $('asClass').value || tClasses[0]?.id;
     const clsStudents = students.filter((x) => x.classId === cls);
+    tSubsMap = {}; subs.forEach((s) => { tSubsMap[s.id] = s; });
+    tAssignsMap = {}; assigns.forEach((a) => { tAssignsMap[a.id] = a; });
     $('assignList').innerHTML = assigns.filter((a) => a.classId === cls).map((a) => {
       const aSubs = subs.filter((x) => x.assignmentId === a.id);
       return `<div class="assign-card"><h3>📝 ${esc(a.title)}</h3>
@@ -405,10 +409,12 @@
           const sub = aSubs.find((x) => x.studentId === st.uid);
           return `<div class="sub-row"><span>${esc(st.name)}</span>
             ${sub ? `<span>${sub.type === 'git' ? `🔗 <a href="${esc(sub.url)}" target="_blank" rel="noopener">${esc(sub.url)}</a>` : `📎 <a href="${esc(sub.url)}" target="_blank" rel="noopener">${esc(sub.name || sub.url)}</a>`}
-            <span class="pill done">제출됨</span></span>`
+            <span class="pill done">제출됨</span>
+            <button class="btn small" data-aifb="${sub.id}" title="AI가 피드백 초안을 만듭니다">🤖 AI 피드백${sub.aiFeedback ? ' ✓' : ''}</button></span>`
             : `<span class="no">미제출 <span class="pill wait">대기</span></span>`}</div>`;
         }).join('') || '<p class="hint">이 반에 학생이 없습니다</p>'}</div>`;
     }).join('') || '<p class="hint">만든 과제가 없습니다</p>';
+    $('assignList').querySelectorAll('[data-aifb]').forEach((b) => b.addEventListener('click', () => openAiFeedback(b.dataset.aifb)));
   }
   $('asClass').addEventListener('change', loadAssignments);
   $('asCreate').addEventListener('click', async () => {
@@ -468,7 +474,8 @@
       return `<div class="assign-card"><h3>📝 ${esc(a.title)}</h3>
         <div class="meta">${esc(a.desc || '')} · 마감: ${esc(a.due || '없음')}</div>
         ${sub ? `<div><span class="pill done">제출 완료</span>
-          ${sub.type === 'git' ? ` <a href="${esc(sub.url)}" target="_blank" rel="noopener" style="color:#58a6ff">${esc(sub.url)}</a>` : ` <a href="${esc(sub.url)}" target="_blank" rel="noopener" style="color:#58a6ff">${esc(sub.name || sub.url)}</a>`}</div>`
+          ${sub.type === 'git' ? ` <a href="${esc(sub.url)}" target="_blank" rel="noopener" style="color:#58a6ff">${esc(sub.url)}</a>` : ` <a href="${esc(sub.url)}" target="_blank" rel="noopener" style="color:#58a6ff">${esc(sub.name || sub.url)}</a>`}</div>
+          ${sub.aiFeedback ? `<div class="ai-fb"><b>🤖 AI 피드백</b><p>${esc(sub.aiFeedback)}</p></div>` : ''}`
         : `<div class="row">
             <input type="url" id="link_${a.id}" placeholder="파일/드라이브 공유 링크" style="flex:1" />
             ${a.allowGit ? `<input type="url" id="git_${a.id}" placeholder="Git 저장소 URL (선택)" style="flex:1" />` : ''}
@@ -627,6 +634,8 @@
   function initTeacherLms() {
     $('sessDate').value = todayStr();
     quizQuestions = []; renderQuizQList();
+    $('aiKeyT').value = aiKey();
+    loadAiKnowledge();
     loadSessions(); loadProgTable(); loadQuizListT(); loadLmsConfigForm();
   }
   $('attClass').addEventListener('change', loadSessions);
@@ -875,6 +884,7 @@
 
   /* ---------- 학생: 내 학습 ---------- */
   async function initStudentLms() {
+    $('aiKeyS').value = aiKey();
     if (!user.classId) {
       $('myStats').innerHTML = '<p class="hint">배정된 반이 없습니다</p>';
       $('myChecklist').innerHTML = ''; $('checkinList').innerHTML = '';
@@ -1093,5 +1103,214 @@
     ctx.font = '700 44px "Noto Sans KR", "Apple SD Gothic Neo", sans-serif'; ctx.fillStyle = '#e0509a';
     ctx.fillText('🎨 메타송이 클래스', W / 2, 735);
   }
+
+  /* ================= AI (Gemini BYOK) ================= */
+  const AI_KEY = 'msc_gemini_key';
+  function aiKey() { return (localStorage.getItem(AI_KEY) || '').trim(); }
+  function requireAiKey() {
+    const k = aiKey();
+    if (!k) { alert('Gemini API 키를 먼저 입력하세요.\nGoogle AI Studio(aistudio.google.com)에서 무료로 발급받을 수 있습니다.'); return null; }
+    return k;
+  }
+  async function callGemini(apiKey, prompt, jsonMode) {
+    const body = { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7 } };
+    if (jsonMode) body.generationConfig.responseMimeType = 'application/json';
+    let res;
+    try {
+      res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + encodeURIComponent(apiKey), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+    } catch (e) { throw new Error('NETWORK:' + (e && e.message)); }
+    if (!res.ok) {
+      let msg = 'HTTP ' + res.status;
+      try { const j = await res.json(); if (j.error && j.error.message) msg = j.error.message; } catch (e2) { /* 무시 */ }
+      throw new Error(msg);
+    }
+    const data = await res.json();
+    const text = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts || [])
+      .map((p) => p.text || '').join('').trim();
+    if (!text) throw new Error('EMPTY_RESPONSE');
+    return text;
+  }
+  function geminiErrorKo(e) {
+    const m = String((e && e.message) || e || '');
+    if (/NETWORK/.test(m)) return '네트워크 오류입니다. 인터넷 연결을 확인하세요.';
+    if (/API key not valid|API_KEY_INVALID/i.test(m)) return 'API 키가 유효하지 않습니다. 키를 다시 확인하세요.';
+    if (/quota|429|RESOURCE_EXHAUSTED/i.test(m)) return 'API 할당량을 초과했습니다. 잠시 후 다시 시도하세요.';
+    if (/EMPTY_RESPONSE/.test(m)) return 'AI가 빈 응답을 보냈습니다. 다시 시도해 주세요.';
+    return 'AI 호출 실패: ' + m;
+  }
+  // AI 응답에서 JSON 배열 추출: 코드펜스 제거 → 직접 파싱 → 배열 패턴 추출 순으로 복구 시도
+  function parseGeminiJson(text) {
+    let t = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+    try { const v = JSON.parse(t); return v; } catch (e) { /* 다음 시도 */ }
+    const m = t.match(/\[[\s\S]*\]/);
+    if (m) { try { return JSON.parse(m[0]); } catch (e2) { /* 실패 */ } }
+    return null;
+  }
+  function normalizeQuizQ(q) {
+    if (!q || typeof q.q !== 'string' || !Array.isArray(q.choices)) return null;
+    const qq = q.q.trim();
+    if (!qq) return null;
+    const choices = q.choices.map((c) => String(c ?? '').trim()).slice(0, 4);
+    while (choices.length < 4) choices.push('');
+    let answer = parseInt(q.answer, 10);
+    if (isNaN(answer) || answer < 0 || answer > 3) answer = 0;
+    return { q: qq, choices, answer };
+  }
+
+  /* ---------- 강사: API 키 + 수업 지식 ---------- */
+  $('aiKeySaveT').addEventListener('click', () => {
+    localStorage.setItem(AI_KEY, $('aiKeyT').value.trim());
+    alert('API 키를 저장했습니다. (이 브라우저에만 저장됨)');
+  });
+  $('aiKeySaveS').addEventListener('click', () => {
+    localStorage.setItem(AI_KEY, $('aiKeyS').value.trim());
+    alert('API 키를 저장했습니다. (이 브라우저에만 저장됨)');
+  });
+  async function loadAiKnowledge() {
+    let text = '';
+    if (DEMO) text = demoDb().aiKnowledge || '';
+    else {
+      try {
+        const s = await db.collection('config').doc('ai_knowledge').get();
+        if (s.exists) text = s.data().text || '';
+      } catch (e) { console.warn('ai knowledge load failed', e); }
+    }
+    if ($('aiKnowledge')) $('aiKnowledge').value = text;
+  }
+  $('aiKnowledgeSave').addEventListener('click', async () => {
+    const text = $('aiKnowledge').value.trim();
+    try {
+      if (DEMO) { const d = demoDb(); d.aiKnowledge = text; demoSave(d); }
+      else await db.collection('config').doc('ai_knowledge').set({ text, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      alert('수업 지식을 저장했습니다.');
+    } catch (e) { alert('저장 실패: ' + e.message); }
+  });
+  async function getAiKnowledge() {
+    if (DEMO) return demoDb().aiKnowledge || '';
+    try {
+      const s = await db.collection('config').doc('ai_knowledge').get();
+      return s.exists ? (s.data().text || '') : '';
+    } catch (e) { console.warn('ai knowledge read failed', e); return ''; }
+  }
+
+  /* ---------- 강사: AI 퀴즈 생성기 ---------- */
+  $('aiQuizGen').addEventListener('click', async () => {
+    const key = requireAiKey(); if (!key) return;
+    const src = $('aiQuizSrc').value.trim();
+    const n = Math.min(20, Math.max(1, parseInt($('aiQuizCount').value, 10) || 5));
+    const level = $('aiQuizLevel').value;
+    if (!src) { alert('주제나 수업 내용을 입력하세요.'); return; }
+    const btn = $('aiQuizGen');
+    btn.disabled = true; btn.textContent = '생성 중…';
+    $('aiQuizPreview').innerHTML = '<p class="hint">AI가 문제를 만들고 있습니다…</p>';
+    try {
+      const prompt = '다음 수업 내용을 바탕으로 객관식 문제 ' + n + '개를 만들어줘. 난이도: ' + level + '.\n'
+        + '반드시 아래 JSON 배열 형식으로만 답해. 다른 설명은 절대 쓰지 마.\n'
+        + '[{"q":"질문","choices":["보기1","보기2","보기3","보기4"],"answer":0}]\n'
+        + 'answer는 정답 보기의 인덱스(0~3).\n\n[수업 내용]\n' + src;
+      const raw = await callGemini(key, prompt, true);
+      const parsed = parseGeminiJson(raw);
+      const norm = (Array.isArray(parsed) ? parsed : []).map(normalizeQuizQ).filter(Boolean);
+      if (!norm.length) throw new Error('PARSE_FAILED');
+      quizQuestions = norm;
+      renderQuizQList();
+      $('aiQuizPreview').innerHTML = '<p class="hint">✅ ' + norm.length + '개 문항을 생성했습니다. 위 문항 목록에서 수정·삭제 후 "📝 퀴즈 만들기"를 눌러 등록하세요.</p>';
+    } catch (e) {
+      const msg = String((e && e.message) || e) === 'PARSE_FAILED'
+        ? 'AI 응답을 문제 형식으로 변환하지 못했습니다. 다시 시도해 주세요.'
+        : geminiErrorKo(e);
+      $('aiQuizPreview').innerHTML = '<p class="hint">❌ ' + esc(msg) + '</p>';
+    } finally { btn.disabled = false; btn.textContent = '✨ 문제 생성'; }
+  });
+
+  /* ---------- 학생: AI 학습 도우미 ---------- */
+  function addChatBubble(who, text) {
+    const div = document.createElement('div');
+    div.className = 'chat-bubble ' + who;
+    div.textContent = text;
+    $('aiChatLog').appendChild(div);
+    $('aiChatLog').scrollTop = $('aiChatLog').scrollHeight;
+    return div;
+  }
+  async function sendAiChat() {
+    const key = requireAiKey(); if (!key) return;
+    const q = $('aiChatInput').value.trim();
+    if (!q) return;
+    $('aiChatInput').value = '';
+    addChatBubble('user', q);
+    const loadingEl = addChatBubble('ai', '답변을 생각 중…');
+    loadingEl.classList.add('loading');
+    try {
+      let knowledge = await getAiKnowledge();
+      if (!knowledge) {
+        const mt = (sMats || []).map((m) => '- 자료(' + m.week + '주차): ' + m.title).join('\n');
+        const at = (sAssigns || []).map((a) => '- 과제: ' + a.title).join('\n');
+        knowledge = '등록된 수업 자료/과제 목록:\n' + (mt + '\n' + at).trim() || '등록된 자료 없음';
+      }
+      const prompt = '너는 메타송이 클래스의 학습 도우미야. 아래 수업 내용을 기반으로 한국어로 친절하게 답변해. '
+        + '수업 내용에 없는 질문이면 모른다고 솔직히 말해.\n\n[수업 내용]\n' + knowledge + '\n\n[학생 질문]\n' + q;
+      const ans = await callGemini(key, prompt, false);
+      loadingEl.textContent = ans;
+    } catch (e) {
+      loadingEl.textContent = '❌ ' + geminiErrorKo(e);
+    } finally {
+      loadingEl.classList.remove('loading');
+      $('aiChatLog').scrollTop = $('aiChatLog').scrollHeight;
+    }
+  }
+  $('aiChatSend').addEventListener('click', sendAiChat);
+  $('aiChatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendAiChat(); });
+
+  /* ---------- 강사: AI 과제 피드백 ---------- */
+  let aiFbSubId = null, aiFbCtx = null;
+  async function openAiFeedback(subId) {
+    const key = requireAiKey(); if (!key) return;
+    const sub = tSubsMap[subId];
+    if (!sub) { alert('제출물을 찾을 수 없습니다.'); return; }
+    const a = tAssignsMap[sub.assignmentId] || {};
+    aiFbSubId = subId;
+    aiFbCtx = { title: a.title || '', desc: a.desc || '', url: sub.url || '', name: sub.studentName || '' };
+    $('aiFbMeta').textContent = (a.title || '과제') + ' · ' + (sub.studentName || '');
+    $('aiFbText').value = sub.aiFeedback || '';
+    $('aiFbModal').style.display = 'flex';
+    if (!sub.aiFeedback) regenAiFeedback();
+  }
+  async function regenAiFeedback() {
+    const key = requireAiKey(); if (!key) return;
+    if (!aiFbCtx) return;
+    const btn = $('aiFbRegen');
+    btn.disabled = true; btn.textContent = '생성 중…';
+    try {
+      const prompt = '너는 온라인 강의의 조교야. 아래 과제 제출물에 대해 학생에게 전달할 피드백을 한국어로 3~5문장으로 작성해줘. '
+        + '잘한 점 1가지와 개선할 점 1가지를 꼭 포함해. 피드백 본문만 출력해.\n\n'
+        + '[과제 제목] ' + aiFbCtx.title + '\n[과제 설명] ' + aiFbCtx.desc + '\n'
+        + '[제출자] ' + aiFbCtx.name + '\n[제출 링크] ' + aiFbCtx.url;
+      const fb = await callGemini(key, prompt, false);
+      $('aiFbText').value = fb.trim();
+    } catch (e) { alert(geminiErrorKo(e)); }
+    finally { btn.disabled = false; btn.textContent = '🔄 다시 생성'; }
+  }
+  $('aiFbRegen').addEventListener('click', regenAiFeedback);
+  $('aiFbClose').addEventListener('click', () => { $('aiFbModal').style.display = 'none'; });
+  $('aiFbSave').addEventListener('click', async () => {
+    if (!aiFbSubId) return;
+    const text = $('aiFbText').value.trim();
+    try {
+      if (DEMO) {
+        const d = demoDb();
+        const s = d.submissions.find((x) => x.id === aiFbSubId);
+        if (s) s.aiFeedback = text;
+        demoSave(d);
+      } else {
+        await db.collection('submissions').doc(aiFbSubId).update({ aiFeedback: text });
+      }
+      if (tSubsMap[aiFbSubId]) tSubsMap[aiFbSubId].aiFeedback = text;
+      alert('AI 피드백을 저장했습니다.');
+      $('aiFbModal').style.display = 'none';
+      loadAssignments();
+    } catch (e) { alert('저장 실패: ' + e.message); }
+  });
 
 })();
