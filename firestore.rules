@@ -1,0 +1,112 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isTeacher() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/teachers/$(request.auth.uid));
+    }
+    function isAdminEmail() {
+      return signedIn()
+        && get(/databases/$(database)/documents/config/admins)
+             .data.emails.hasAny([request.auth.token.email]);
+    }
+
+    // 설정 (admins: 강사 이메일 목록, drive: 드라이브 폴더 링크)
+    match /config/{docId} {
+      allow read: if signedIn();
+      allow write: if isTeacher();
+    }
+    // 강사 명단 (최초 등록은 admins 이메일 대조)
+    match /teachers/{uid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.auth.uid == uid && isAdminEmail();
+      allow update, delete: if isTeacher();
+    }
+    // 회원
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.auth.uid == uid;
+      allow update: if (signedIn() && request.auth.uid == uid) || isTeacher();
+      allow delete: if isTeacher();
+    }
+    // 반 / 자료 / 링크 / 과제 — 읽기: 로그인 사용자, 쓰기: 강사
+    match /classes/{docId} {
+      allow read: if signedIn();
+      allow write: if isTeacher();
+    }
+    match /materials/{docId} {
+      allow read: if signedIn();
+      allow write: if isTeacher();
+    }
+    match /links/{docId} {
+      allow read: if signedIn();
+      allow write: if isTeacher();
+    }
+    match /assignments/{docId} {
+      allow read: if signedIn();
+      allow write: if isTeacher();
+    }
+    // 제출물 — 학생은 자기 것만, 강사는 전체
+    match /submissions/{docId} {
+      allow read: if isTeacher()
+        || (signedIn() && resource.data.studentId == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.studentId == request.auth.uid;
+      allow update, delete: if isTeacher();
+    }
+    // ---- LMS ----
+    // 출석 회차 — 읽기: 로그인 사용자, 쓰기: 강사
+    match /classes/{classId}/sessions/{sessionId} {
+      allow read: if signedIn();
+      allow write: if isTeacher();
+    }
+    // 출석 기록 — 학생은 본인 것만 생성(셀프 체크인), 강사는 전체 관리
+    match /classes/{classId}/attendance/{recordId} {
+      allow read: if signedIn();
+      allow create: if isTeacher()
+        || (signedIn() && request.resource.data.uid == request.auth.uid);
+      allow update: if isTeacher()
+        || (signedIn() && resource.data.uid == request.auth.uid && resource.data.by == 'self');
+      allow delete: if isTeacher();
+    }
+    // 학습 진도 (자료 열람 기록) — 본인 것만 쓰기, 강사는 전체 조회
+    match /progress/{uid} {
+      allow read: if (signedIn() && request.auth.uid == uid) || isTeacher();
+      allow write: if (signedIn() && request.auth.uid == uid) || isTeacher();
+    }
+    match /progress/{uid}/views/{viewId} {
+      allow read: if (signedIn() && request.auth.uid == uid) || isTeacher();
+      allow write: if (signedIn() && request.auth.uid == uid) || isTeacher();
+    }
+    // 퀴즈 — 미공개는 강사만 읽기, 공개된 것은 로그인 사용자 읽기 / 쓰기: 강사
+    match /classes/{classId}/quizzes/{quizId} {
+      allow read: if isTeacher() || (signedIn() && resource.data.published == true);
+      allow write: if isTeacher();
+    }
+    // 퀴즈 결과 — 학생은 본인 것만 생성/읽기, 강사는 전체
+    match /classes/{classId}/quizResults/{resultId} {
+      allow read: if isTeacher() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isTeacher();
+    }
+    // 수료증 발급 기록 — 학생은 본인 것만 생성/읽기, 강사는 전체
+    match /certificates/{certId} {
+      allow read: if isTeacher() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isTeacher();
+    }
+    // 수료 기준(config/lms)은 위 match /config/{docId} 규칙이 그대로 커버
+    // (읽기: 로그인 사용자, 쓰기: 강사) — 별도 규칙 불필요
+    // 화이트보드 — 반별 단일 보드, 도형 단위 실시간 동기화
+    match /boards/{docId} {
+      allow read: if signedIn();
+      allow write: if isTeacher()
+        || (signedIn() && docId.endsWith('__s_' + request.auth.uid));
+    }
+    match /boards/{room}/shapes/{shapeId} {
+      allow read: if signedIn();
+      allow write: if signedIn();
+    }
+  }
+}
